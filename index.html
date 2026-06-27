@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>YPS AI</title>
+    <link rel="stylesheet" href="styles.css?v=20260624-footer-inline" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Chat navigation">
+        <div class="brand-row">
+          <img class="brand-logo" src="assets/yps-ai-logo.png?v=20260624-logo" alt="YPS AI logo" />
+        </div>
+
+        <button class="new-chat" id="newChatButton" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+          New chat
+        </button>
+
+        <div class="history-block">
+          <div class="history-header">
+            <span>Chat history</span>
+            <button
+              class="history-search-toggle"
+              id="chatSearchButton"
+              type="button"
+              aria-label="Search chat history"
+              aria-expanded="false"
+              aria-controls="chatSearch"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="11" cy="11" r="6" />
+                <path d="m16 16 4 4" />
+              </svg>
+            </button>
+          </div>
+          <div class="history-search" id="chatSearch" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="11" cy="11" r="6" />
+              <path d="m16 16 4 4" />
+            </svg>
+            <input id="chatSearchInput" type="search" placeholder="Search chats..." autocomplete="off" />
+          </div>
+        </div>
+        <nav class="chat-list" id="chatList" aria-label="Temporary chat history"></nav>
+
+        <div class="sidebar-footer">
+          <button class="ghost-button" id="aboutButton" type="button">About us</button>
+          <div class="top-actions">
+            <div class="accessibility-menu" id="accessibilityMenu">
+              <button
+                class="accessibility-toggle"
+                id="accessibilityButton"
+                type="button"
+                aria-label="Accessibility options"
+                aria-haspopup="menu"
+                aria-expanded="false"
+              >
+                <img src="assets/accessibility-icon.webp" alt="" aria-hidden="true" />
+              </button>
+              <div class="accessibility-panel" role="menu" aria-label="Accessibility options">
+                <p>Accessibility</p>
+                <label>
+                  <input id="largeTextToggle" type="checkbox" />
+                  <span>Large text</span>
+                </label>
+                <label>
+                  <input id="contrastToggle" type="checkbox" />
+                  <span>High contrast</span>
+                </label>
+                <label>
+                  <input id="colorBlindToggle" type="checkbox" />
+                  <span>Color-blind friendly</span>
+                </label>
+              </div>
+            </div>
+            <button class="theme-toggle" id="themeButton" type="button" aria-label="Switch to dark mode">
+              <svg class="sun-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 4V2M12 22v-2M4 12H2M22 12h-2M5 5 3.6 3.6M20.4 20.4 19 19M19 5l1.4-1.4M3.6 20.4 5 19" />
+                <circle cx="12" cy="12" r="4" />
+              </svg>
+              <svg class="moon-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M20 14.4A8.5 8.5 0 0 1 9.6 4 7 7 0 1 0 20 14.4Z" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      <main class="chat-panel">
+        <section class="messages" id="messages" aria-live="polite"></section>
+
+        <form class="composer" id="chatForm">
+          <div class="composer-shell">
+            <textarea
+              id="messageInput"
+              name="message"
+              rows="1"
+              placeholder="Ask anything about youth, peace and security agenda..."
+              autocomplete="off"
+            ></textarea>
+            <div class="composer-actions">
+              <div class="source-picker" id="sourcePicker">
+                <button
+                  class="source-trigger"
+                  id="sourceTrigger"
+                  type="button"
+                  aria-haspopup="listbox"
+                  aria-expanded="false"
+                >
+                  <span id="sourceLabel">All sources</span>
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="m7 10 5 5 5-5" />
+                  </svg>
+                </button>
+                <div class="source-menu" id="sourceMenu" role="listbox" aria-label="Choose sources">
+                  <p>Sources</p>
+                  <button class="source-option selected" type="button" role="option" aria-selected="true" data-source="all">
+                    <span>All sources</span>
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="m20 6-11 11-5-5" />
+                    </svg>
+                  </button>
+                  <button class="source-option" type="button" role="option" aria-selected="false" data-source="UN Resolutions &amp; Frameworks">
+                    <span>UN Resolutions &amp; Frameworks</span>
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="m20 6-11 11-5-5" />
+                    </svg>
+                  </button>
+                  <button class="source-option" type="button" role="option" aria-selected="false" data-source="UN Publications">
+                    <span>UN Publications</span>
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="m20 6-11 11-5-5" />
+                    </svg>
+                  </button>
+                  <button class="source-option" type="button" role="option" aria-selected="false" data-source="Regional Organizations Documents">
+                    <span>Regional Organizations Documents</span>
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="m20 6-11 11-5-5" />
+                    </svg>
+                  </button>
+                  <button class="source-option" type="button" role="option" aria-selected="false" data-source="National Action Plans and Strategies">
+                    <span>National Action Plans and Strategies</span>
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="m20 6-11 11-5-5" />
+                    </svg>
+                  </button>
+                  <button class="source-option" type="button" role="option" aria-selected="false" data-source="Academic Research">
+                    <span>Academic Research</span>
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="m20 6-11 11-5-5" />
+                    </svg>
+                  </button>
+                  <button class="source-option" type="button" role="option" aria-selected="false" data-source="Civil Society &amp; NGO Publications">
+                    <span>Civil Society &amp; NGO Publications</span>
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="m20 6-11 11-5-5" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+              <div class="right-actions">
+                <p class="speech-status" id="speechStatus" aria-live="polite"></p>
+                <button class="mic-button" id="micButton" type="button" aria-label="Start speech to text">
+                  <span class="mic-wave" aria-hidden="true"></span>
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z" />
+                    <path d="M19 11a7 7 0 0 1-14 0M12 18v3M8 21h8" />
+                  </svg>
+                </button>
+                <button class="send-button" type="submit" aria-label="Send message">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M12 19V5M5 12l7-7 7 7" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </form>
+        <p class="privacy-note">
+          <strong>Privacy &amp; Data Use:</strong> This tool uses third-party AI services to process user queries.
+          Conversations are cleared when you leave this page. Please do not submit sensitive or personally
+          identifiable information.
+          <span class="copyright-line">
+            &copy; <span id="copyrightYear"></span>
+            <a href="https://www.sfcg.org" target="_blank" rel="noopener noreferrer">Search for Common Ground</a>.
+            All rights reserved.
+          </span>
+        </p>
+      </main>
+    </div>
+
+    <dialog class="about-modal" id="aboutModal">
+      <button class="modal-close" id="closeAboutButton" type="button" aria-label="Close">x</button>
+      <p class="eyebrow">About us</p>
+      <h2>
+        <img
+          class="about-logo about-logo-light"
+          src="assets/yps-ai-about-logo.png?v=20260624-about"
+          alt="YPS AI"
+        />
+        <img
+          class="about-logo about-logo-dark"
+          src="assets/yps-ai-about-logo-dark.png?v=20260624-darkgrey"
+          alt="YPS AI"
+        />
+      </h2>
+      <p>
+        This tool was developed by Yahya Qanie, with support from Lena Slachmuijlder and Saji
+        Prelis of Search for Common Ground, and with technical development led by Murtaza Qanie.
+        It was created to make information on the Youth, Peace and Security agenda — anchored in
+        UN Security Council Resolution 2250 — more accessible and to strengthen the YPS movement
+        among organizations, academics, and policymakers.
+      </p>
+      <div class="about-grid">
+        <section>
+          <h3>What sources it uses</h3>
+          <p>
+            This tool is grounded in a curated knowledge base that includes publicly available
+            UN resolutions and frameworks, UN publications, regional organization documents,
+            national action plans and strategies, academic research, and publications from
+            civil society and non-governmental organizations.
+          </p>
+        </section>
+        <section>
+          <h3>Contact Us</h3>
+          <ul class="contact-list">
+            <li>
+              <strong>Yahya Qanie</strong>
+              <span><a href="mailto:yqanie@sfcg.org">Email</a> · <a href="https://www.linkedin.com/in/yqanie/" target="_blank" rel="noreferrer">LinkedIn</a></span>
+            </li>
+            <li>
+              <strong>Saji Prelis</strong>
+              <span><a href="mailto:sprelis@sfcg.org">Email</a> · <a href="https://www.linkedin.com/in/sajiprelis/" target="_blank" rel="noreferrer">LinkedIn</a></span>
+            </li>
+          </ul>
+        </section>
+      </div>
+    </dialog>
+
+    <script src="script.js?v=20260624-footer-link"></script>
+  </body>
+</html>
