@@ -1323,3 +1323,57 @@ body.dark .about-logo-dark {
     grid-template-columns: 1fr;
   }
 }
+
+/* ── Typing / loading indicator ──────────────────────────────────────────── */
+.typing-bubble {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 14px 18px;
+  min-width: 56px;
+}
+
+.typing-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+  animation: typingBounce 1.2s ease-in-out infinite;
+}
+
+.typing-dot:nth-child(2) { animation-delay: 0.2s; }
+.typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes typingBounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30%            { transform: translateY(-6px); opacity: 1; }
+}
+
+/* ── Markdown rendering inside assistant bubbles ─────────────────────────── */
+.assistant .bubble ul,
+.assistant .bubble ol {
+  margin: 6px 0 6px 1.4em;
+  padding: 0;
+}
+
+.assistant .bubble li {
+  margin-bottom: 3px;
+  line-height: 1.55;
+}
+
+.assistant .bubble strong {
+  font-weight: 600;
+}
+
+.assistant .bubble em {
+  font-style: italic;
+}
+
+/* Inline citation superscripts [1] [2] */
+.assistant .bubble sup.cite {
+  font-size: 0.72em;
+  vertical-align: super;
+  color: var(--muted);
+  font-weight: 600;
+  letter-spacing: 0;
+}

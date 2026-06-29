@@ -1,3 +1,8 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// YPS AI — frontend script
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── Source labels ─────────────────────────────────────────────────────────────
 const SOURCE_NOTES = {
   all: "I am considering all configured YPS source groups together.",
   "UN Resolutions & Frameworks":
@@ -14,6 +19,17 @@ const SOURCE_NOTES = {
     "I am focusing on civil society and NGO publications, youth-led peacebuilding practice, advocacy, and local implementation lessons.",
 };
 
+// Map source picker values → knowledge base file keys
+const SOURCE_TO_KB_KEY = {
+  all: ["un-resolutions", "un-publications", "regional-org", "nap-strategies", "academic-research", "ngo-civil-society"],
+  "UN Resolutions & Frameworks": ["un-resolutions"],
+  "UN Publications": ["un-publications"],
+  "Regional Organizations Documents": ["regional-org"],
+  "National Action Plans and Strategies": ["nap-strategies"],
+  "Academic Research": ["academic-research"],
+  "Civil Society & NGO Publications": ["ngo-civil-society"],
+};
+
 const STARTER_PROMPTS = [
   "Summarize the Youth, Peace and Security agenda",
   "What are the best ways to include youth in decision-making?",
@@ -21,41 +37,50 @@ const STARTER_PROMPTS = [
   "What are the stages of developing a National Action Plan?",
 ];
 
+// ── Chat state ────────────────────────────────────────────────────────────────
 let chats = [];
 let activeChatId = null;
 let activeSource = "all";
 
-const chatList = document.querySelector("#chatList");
-const chatSearchButton = document.querySelector("#chatSearchButton");
-const chatSearch = document.querySelector("#chatSearch");
-const chatSearchInput = document.querySelector("#chatSearchInput");
-const messages = document.querySelector("#messages");
-const activeTitle = document.querySelector("#activeTitle");
-const brandLogo = document.querySelector(".brand-logo");
-const chatForm = document.querySelector("#chatForm");
-const messageInput = document.querySelector("#messageInput");
-const sourcePicker = document.querySelector("#sourcePicker");
-const sourceTrigger = document.querySelector("#sourceTrigger");
-const sourceLabel = document.querySelector("#sourceLabel");
-const sourceOptions = Array.from(document.querySelectorAll(".source-option"));
-const micButton = document.querySelector("#micButton");
-const speechStatus = document.querySelector("#speechStatus");
-const newChatButton = document.querySelector("#newChatButton");
-const aboutButton = document.querySelector("#aboutButton");
-const aboutModal = document.querySelector("#aboutModal");
-const closeAboutButton = document.querySelector("#closeAboutButton");
-const themeButton = document.querySelector("#themeButton");
-const accessibilityMenu = document.querySelector("#accessibilityMenu");
+// ── Knowledge base cache (loaded lazily per category) ─────────────────────────
+const kbCache = {};       // { "academic-research": [...chunks], ... }
+const kbLoading = {};     // { "academic-research": Promise, ... }
+
+// ── DOM refs ──────────────────────────────────────────────────────────────────
+const chatList            = document.querySelector("#chatList");
+const chatSearchButton    = document.querySelector("#chatSearchButton");
+const chatSearch          = document.querySelector("#chatSearch");
+const chatSearchInput     = document.querySelector("#chatSearchInput");
+const messages            = document.querySelector("#messages");
+const activeTitle         = document.querySelector("#activeTitle");
+const brandLogo           = document.querySelector(".brand-logo");
+const chatForm            = document.querySelector("#chatForm");
+const messageInput        = document.querySelector("#messageInput");
+const sourcePicker        = document.querySelector("#sourcePicker");
+const sourceTrigger       = document.querySelector("#sourceTrigger");
+const sourceLabel         = document.querySelector("#sourceLabel");
+const sourceOptions       = Array.from(document.querySelectorAll(".source-option"));
+const micButton           = document.querySelector("#micButton");
+const speechStatus        = document.querySelector("#speechStatus");
+const newChatButton       = document.querySelector("#newChatButton");
+const aboutButton         = document.querySelector("#aboutButton");
+const aboutModal          = document.querySelector("#aboutModal");
+const closeAboutButton    = document.querySelector("#closeAboutButton");
+const themeButton         = document.querySelector("#themeButton");
+const accessibilityMenu   = document.querySelector("#accessibilityMenu");
 const accessibilityButton = document.querySelector("#accessibilityButton");
-const largeTextToggle = document.querySelector("#largeTextToggle");
-const contrastToggle = document.querySelector("#contrastToggle");
-const colorBlindToggle = document.querySelector("#colorBlindToggle");
-const copyrightYear = document.querySelector("#copyrightYear");
-const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-const speechSynthesisApi = window.speechSynthesis;
-const LIGHT_LOGO_SRC = "assets/yps-ai-logo.png?v=20260624-logo";
-const DARK_LOGO_SRC = "assets/yps-ai-logo-dark.png?v=20260624-darkgrey";
+const largeTextToggle     = document.querySelector("#largeTextToggle");
+const contrastToggle      = document.querySelector("#contrastToggle");
+const colorBlindToggle    = document.querySelector("#colorBlindToggle");
+const copyrightYear       = document.querySelector("#copyrightYear");
+const SpeechRecognition   = window.SpeechRecognition || window.webkitSpeechRecognition;
+const speechSynthesisApi  = window.speechSynthesis;
+
+const LIGHT_LOGO_SRC  = "assets/yps-ai-logo.png?v=20260624-logo";
+const DARK_LOGO_SRC   = "assets/yps-ai-logo-dark.png?v=20260624-darkgrey";
 const MAX_INPUT_LINES = 7;
+const LOADING_MSG_ID  = "__loading__";
+
 const DOWNLOAD_ICON = `
   <svg viewBox="0 0 24 24" aria-hidden="true">
     <path d="M12 3v11" />
@@ -63,6 +88,7 @@ const DOWNLOAD_ICON = `
     <path d="M5 16.5v1.8A2.7 2.7 0 0 0 7.7 21h8.6a2.7 2.7 0 0 0 2.7-2.7v-1.8" />
   </svg>
 `;
+
 let recognition = null;
 let isListening = false;
 let voiceInputPending = false;
@@ -74,8 +100,186 @@ if (copyrightYear) {
   copyrightYear.textContent = new Date().getFullYear();
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Knowledge base helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Load a single category JSON file, with deduplication via the promise cache. */
+function loadKBCategory(key) {
+  if (kbCache[key]) return Promise.resolve(kbCache[key]);
+  if (kbLoading[key]) return kbLoading[key];
+
+  kbLoading[key] = fetch(`knowledge/${key}.json`)
+    .then((r) => {
+      if (!r.ok) throw new Error(`${key}.json not found (${r.status})`);
+      return r.json();
+    })
+    .then((chunks) => {
+      kbCache[key] = chunks;
+      return chunks;
+    })
+    .catch((err) => {
+      console.warn(`[KB] Could not load ${key}:`, err.message);
+      kbCache[key] = [];
+      return [];
+    });
+
+  return kbLoading[key];
+}
+
+/** Load all category files required for the active source filter. */
+async function loadKBForSource(source) {
+  const keys = SOURCE_TO_KB_KEY[source] || SOURCE_TO_KB_KEY.all;
+  const results = await Promise.all(keys.map(loadKBCategory));
+  return results.flat();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Retrieval — simple TF-IDF-style keyword scoring
+// ─────────────────────────────────────────────────────────────────────────────
+
+const STOP_WORDS = new Set([
+  "the","a","an","and","or","but","in","on","at","to","for","of","with",
+  "is","are","was","were","be","been","being","have","has","had","do","does",
+  "did","will","would","could","should","may","might","shall","can","that",
+  "this","these","those","it","its","we","our","they","their","you","your",
+  "i","my","he","she","his","her","as","by","from","not","no","so","if","about",
+]);
+
+function tokenize(text) {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length > 2 && !STOP_WORDS.has(w));
+}
+
+function scoreChunk(chunkText, queryTokens) {
+  const tokens = tokenize(chunkText);
+  const freq = {};
+  for (const t of tokens) freq[t] = (freq[t] || 0) + 1;
+
+  let score = 0;
+  for (const qt of queryTokens) {
+    if (freq[qt]) score += 1 + Math.log(freq[qt]);
+    // Partial prefix match (e.g. "youth" matches "youthful")
+    for (const t in freq) {
+      if (t !== qt && t.startsWith(qt)) score += 0.3;
+    }
+  }
+  return score;
+}
+
+function retrieveContext(chunks, query, topK = 5) {
+  if (!chunks.length) return [];
+  const queryTokens = tokenize(query);
+  if (!queryTokens.length) return [];
+
+  return chunks
+    .map((c) => ({ ...c, _score: scoreChunk(c.text, queryTokens) }))
+    .filter((c) => c._score > 0)
+    .sort((a, b) => b._score - a._score)
+    .slice(0, topK);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// API call
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function callChatAPI(query, source, history) {
+  // Load and search the knowledge base
+  const allChunks = await loadKBForSource(source);
+  const context = retrieveContext(allChunks, query, 5);
+
+  // Build message history for the API (last 10 turns max to stay within limits)
+  const apiMessages = history
+    .filter((m) => m.id !== LOADING_MSG_ID)
+    .slice(-10)
+    .map((m) => ({ role: m.role, text: m.text }));
+
+  const response = await fetch("/api/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ messages: apiMessages, context, source }),
+  });
+
+  const data = await response.json();
+
+  if (!response.ok || data.error) {
+    throw new Error(data.error || `Server error (${response.status})`);
+  }
+
+  return data.reply;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Markdown → HTML (minimal, safe)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function renderMarkdown(text) {
+  // Escape raw HTML first so we don't accidentally inject anything
+  let html = text
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+
+  // Bold **text**
+  html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+  // Italic *text* or _text_
+  html = html.replace(/\*(.+?)\*/g, "<em>$1</em>");
+  html = html.replace(/_(.+?)_/g, "<em>$1</em>");
+
+  // Inline citation markers [1], [2] → superscript
+  html = html.replace(/\[(\d+)\]/g, "<sup class='cite'>[$1]</sup>");
+
+  // Split into lines for block-level processing
+  const lines = html.split("\n");
+  const out = [];
+  let inUL = false;
+  let inOL = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const ulMatch = line.match(/^[-*•]\s+(.+)/);
+    const olMatch = line.match(/^\d+\.\s+(.+)/);
+
+    if (ulMatch) {
+      if (!inUL) { out.push("<ul>"); inUL = true; }
+      if (inOL)  { out.push("</ol>"); inOL = false; }
+      out.push(`<li>${ulMatch[1]}</li>`);
+    } else if (olMatch) {
+      if (!inOL) { out.push("<ol>"); inOL = true; }
+      if (inUL)  { out.push("</ul>"); inUL = false; }
+      out.push(`<li>${olMatch[1]}</li>`);
+    } else {
+      if (inUL) { out.push("</ul>"); inUL = false; }
+      if (inOL) { out.push("</ol>"); inOL = false; }
+
+      if (line.trim() === "") {
+        // Paragraph break
+        if (out.length && out[out.length - 1] !== "<br>") out.push("<br>");
+      } else {
+        out.push(line);
+        out.push("<br>");
+      }
+    }
+  }
+  if (inUL) out.push("</ul>");
+  if (inOL) out.push("</ol>");
+
+  // Clean up multiple consecutive <br>
+  return out.join("\n").replace(/(<br>\s*){3,}/g, "<br><br>");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Chat state
+// ─────────────────────────────────────────────────────────────────────────────
+
 function createId() {
-  return typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
+  return typeof crypto !== "undefined" && crypto.randomUUID
+    ? crypto.randomUUID()
+    : String(Date.now());
 }
 
 function createChat() {
@@ -86,7 +290,6 @@ function createChat() {
     messages: [],
     createdAt: new Date(),
   };
-
   chats.unshift(chat);
   activeChatId = chat.id;
   render();
@@ -95,6 +298,10 @@ function createChat() {
 function getActiveChat() {
   return chats.find((chat) => chat.id === activeChatId);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Render
+// ─────────────────────────────────────────────────────────────────────────────
 
 function render() {
   renderHistory();
@@ -110,11 +317,10 @@ function renderHistory() {
         const searchableText = [
           chat.title,
           getSourceName(chat.source),
-          ...chat.messages.map((message) => message.text),
+          ...chat.messages.map((m) => m.text),
         ]
           .join(" ")
           .toLowerCase();
-
         return searchableText.includes(query);
       })
     : chats;
@@ -136,7 +342,9 @@ function renderHistory() {
     button.className = "chat-item";
     button.innerHTML = `
       <strong>${escapeHtml(chat.title)}</strong>
-      <span>${chat.messages.length} messages - ${escapeHtml(chat.source === "all" ? "All sources" : chat.source)}</span>
+      <span>${chat.messages.length} messages - ${escapeHtml(
+        chat.source === "all" ? "All sources" : chat.source
+      )}</span>
     `;
     button.addEventListener("click", () => {
       activeChatId = chat.id;
@@ -162,15 +370,11 @@ function renderMessages() {
   messages.innerHTML = "";
 
   if (!chat) {
-    if (activeTitle) {
-      activeTitle.textContent = "New conversation";
-    }
+    if (activeTitle) activeTitle.textContent = "New conversation";
     return;
   }
 
-  if (activeTitle) {
-    activeTitle.textContent = chat.title;
-  }
+  if (activeTitle) activeTitle.textContent = chat.title;
   setActiveSource(chat.source, false);
 
   if (chat.messages.length === 0) {
@@ -179,12 +383,33 @@ function renderMessages() {
   }
 
   chat.messages.forEach((item) => {
+    // Loading indicator
+    if (item.id === LOADING_MSG_ID) {
+      const row = document.createElement("article");
+      row.className = "message assistant";
+      row.id = "loadingMessage";
+      row.innerHTML = `
+        <div class="bubble typing-bubble" aria-label="Searching sources and generating answer">
+          <span class="typing-dot"></span>
+          <span class="typing-dot"></span>
+          <span class="typing-dot"></span>
+        </div>`;
+      messages.appendChild(row);
+      messages.scrollTop = messages.scrollHeight;
+      return;
+    }
+
     const row = document.createElement("article");
     row.className = `message ${item.role}`;
 
     const bubble = document.createElement("div");
     bubble.className = "bubble";
-    bubble.textContent = item.text;
+
+    if (item.role === "assistant") {
+      bubble.innerHTML = renderMarkdown(item.text);
+    } else {
+      bubble.textContent = item.text;
+    }
 
     row.appendChild(bubble);
 
@@ -206,7 +431,9 @@ function renderMessages() {
         listenButton.className = `listen-reply${speakingMessageId === item.id ? " playing" : ""}`;
         listenButton.setAttribute(
           "aria-label",
-          speakingMessageId === item.id ? "Stop listening to this answer" : "Listen to this answer",
+          speakingMessageId === item.id
+            ? "Stop listening to this answer"
+            : "Listen to this answer"
         );
         listenButton.innerHTML = `
           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -258,7 +485,11 @@ function createEmptyState() {
   return wrapper;
 }
 
-function submitMessage(rawMessage, fromVoice = false) {
+// ─────────────────────────────────────────────────────────────────────────────
+// Submit — async, calls real AI
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function submitMessage(rawMessage, fromVoice = false) {
   const text = rawMessage.trim();
   if (!text) return;
 
@@ -279,14 +510,32 @@ function submitMessage(rawMessage, fromVoice = false) {
 
   messageInput.value = "";
   resizeInput();
+
+  // Show loading indicator
+  chat.messages.push({ id: LOADING_MSG_ID, role: "assistant", text: "" });
   render();
 
-  window.setTimeout(() => {
-    const reply = generateReply(text, chat.source, chat.messages);
+  try {
+    const reply = await callChatAPI(text, chat.source, chat.messages);
+    // Remove loading indicator and add real reply
+    chat.messages = chat.messages.filter((m) => m.id !== LOADING_MSG_ID);
     chat.messages.push({ id: createId(), role: "assistant", text: reply, fromVoice });
-    render();
-  }, 360);
+  } catch (err) {
+    chat.messages = chat.messages.filter((m) => m.id !== LOADING_MSG_ID);
+    chat.messages.push({
+      id: createId(),
+      role: "assistant",
+      text: `⚠️ ${err.message || "Something went wrong. Please try again."}`,
+      fromVoice,
+    });
+  }
+
+  render();
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Utilities
+// ─────────────────────────────────────────────────────────────────────────────
 
 function createTitle(text) {
   return text.length > 42 ? `${text.slice(0, 39)}...` : text;
@@ -309,9 +558,14 @@ function formatDate(value) {
 }
 
 function createTextFile(title, lines) {
-  return [`Website: YPS AI`, `Date: ${formatDate(new Date())}`, `Title: ${title}`, "", ...lines, ""].join(
-    "\n",
-  );
+  return [
+    `Website: YPS AI`,
+    `Date: ${formatDate(new Date())}`,
+    `Title: ${title}`,
+    "",
+    ...lines,
+    "",
+  ].join("\n");
 }
 
 function downloadTextFile(fileName, text) {
@@ -327,11 +581,11 @@ function downloadTextFile(fileName, text) {
 
 function downloadAnswer(chat, message) {
   const title = `${chat.title} - Answer`;
-  const messageIndex = chat.messages.findIndex((item) => item.id === message.id);
+  const messageIndex = chat.messages.findIndex((m) => m.id === message.id);
   const prompt = [...chat.messages]
     .slice(0, messageIndex)
     .reverse()
-    .find((item) => item.role === "user");
+    .find((m) => m.role === "user");
   const lines = [
     `Source: ${getSourceName(chat.source)}`,
     "",
@@ -339,52 +593,23 @@ function downloadAnswer(chat, message) {
     "",
     `Answer: ${message.text}`,
   ];
-
   downloadTextFile(title, createTextFile(title, lines));
 }
 
 function downloadChat(chat) {
   if (!chat.messages.length) return;
-
   const lines = [
     `Source: ${getSourceName(chat.source)}`,
     `Created: ${formatDate(chat.createdAt)}`,
     "",
-    ...chat.messages.flatMap((message) => {
-      const label = message.role === "user" ? "You" : "Answer";
-      return [`${label}: ${message.text}`, ""];
-    }),
+    ...chat.messages
+      .filter((m) => m.id !== LOADING_MSG_ID)
+      .flatMap((m) => {
+        const label = m.role === "user" ? "You" : "Answer";
+        return [`${label}: ${m.text}`, ""];
+      }),
   ];
-
   downloadTextFile(chat.title, createTextFile(chat.title, lines));
-}
-
-function generateReply(text, source, history) {
-  const lower = text.toLowerCase();
-  const sourceNote = SOURCE_NOTES[source] || SOURCE_NOTES.all;
-  const priorTurns = Math.max(0, Math.floor((history.length - 1) / 2));
-
-  if (lower.includes("national action plan") || lower.includes("nap")) {
-    return `${sourceNote}\n\nA strong YPS National Action Plan should usually include: youth participation mechanisms, protection measures, prevention priorities, partnerships with youth-led organizations, budget lines, indicators, and a reporting cycle. Start by asking which young people are affected, who already leads peace work locally, and what decision spaces they can meaningfully enter.`;
-  }
-
-  if (lower.includes("resolution") || lower.includes("2250")) {
-    return `${sourceNote}\n\nUN Security Council Resolution 2250 frames young people as partners in peace, not only as beneficiaries. Useful entry points are participation, protection, prevention, partnerships, and disengagement and reintegration. For a practical answer, connect each pillar to a concrete institution, budget, and youth-led accountability channel.`;
-  }
-
-  if (lower.includes("project") || lower.includes("proposal") || lower.includes("idea")) {
-    return `${sourceNote}\n\nA compact YPS project concept could include: a youth-led conflict analysis, dialogue sessions with local authorities, small grants for community peace actions, psychosocial referral pathways, and a public learning brief. Keep the design participatory: young people should help define the problem, choose activities, monitor risks, and present the results.`;
-  }
-
-  if (lower.includes("participat") || lower.includes("peace process")) {
-    return `${sourceNote}\n\nYouth participation works best when it moves beyond consultation. Consider reserved seats, paid advisory roles, youth caucuses, local-to-national feedback channels, and protection protocols for young peacebuilders who may face backlash. The key test is whether youth input can change decisions.`;
-  }
-
-  if (lower.includes("source") || lower.includes("about")) {
-    return `${sourceNote}\n\nThis prototype is structured around these source modes: UN Resolutions & Frameworks, UN Publications, Regional Organizations Documents, National Action Plans and Strategies, Academic Research, Civil Society & NGO Publications, and All sources. A production version would connect these modes to a reviewed document library and cite exact documents in each answer.`;
-  }
-
-  return `${sourceNote}\n\nHere is a YPS-focused way to approach this: define the peace and security issue, identify which groups of young people are most affected, map the institutions with decision power, and choose one practical action that increases meaningful youth participation. This chat has ${priorTurns} earlier exchange${priorTurns === 1 ? "" : "s"} in temporary memory for this page session.`;
 }
 
 function resizeInput() {
@@ -392,10 +617,10 @@ function resizeInput() {
   const styles = window.getComputedStyle(messageInput);
   const lineHeight = Number.parseFloat(styles.lineHeight) || 22;
   const padding =
-    Number.parseFloat(styles.paddingTop) + Number.parseFloat(styles.paddingBottom) || 0;
+    Number.parseFloat(styles.paddingTop) +
+    Number.parseFloat(styles.paddingBottom) || 0;
   const maxHeight = lineHeight * MAX_INPUT_LINES + padding;
   const nextHeight = Math.min(messageInput.scrollHeight, maxHeight);
-
   messageInput.style.height = `${nextHeight}px`;
   messageInput.classList.toggle("multiline", messageInput.scrollHeight > 62);
   messageInput.classList.toggle("scrollable", messageInput.scrollHeight > maxHeight);
@@ -437,7 +662,6 @@ function closeAccessibilityMenu() {
 function closeChatSearch(clearQuery = false) {
   chatSearch.hidden = true;
   chatSearchButton.setAttribute("aria-expanded", "false");
-
   if (clearQuery && chatSearchInput.value) {
     chatSearchInput.value = "";
     renderHistory();
@@ -447,7 +671,10 @@ function closeChatSearch(clearQuery = false) {
 function setListeningState(nextState, status = "") {
   isListening = nextState;
   micButton.classList.toggle("listening", nextState);
-  micButton.setAttribute("aria-label", nextState ? "Stop speech to text" : "Start speech to text");
+  micButton.setAttribute(
+    "aria-label",
+    nextState ? "Stop speech to text" : "Start speech to text"
+  );
   speechStatus.textContent = status;
 }
 
@@ -464,14 +691,11 @@ function toggleAssistantAudio(message) {
     stopAssistantAudio();
     return;
   }
-
   speakAssistantReply(message.text, message.id);
 }
 
 function stopAssistantAudio() {
-  if (speechSynthesisApi) {
-    speechSynthesisApi.cancel();
-  }
+  if (speechSynthesisApi) speechSynthesisApi.cancel();
   speakingMessageId = null;
   speechStatus.textContent = "";
   renderMessages();
@@ -482,31 +706,28 @@ function speakAssistantReply(text, messageId) {
     speechStatus.textContent = "Audio not supported";
     return;
   }
-
   speechSynthesisApi.cancel();
   speakingMessageId = messageId;
   renderMessages();
-  const utterance = new SpeechSynthesisUtterance(text.replace(/\s+/g, " ").trim());
+  const utterance = new SpeechSynthesisUtterance(
+    text.replace(/\s+/g, " ").trim()
+  );
   utterance.lang = "en-US";
   utterance.rate = 0.96;
   utterance.pitch = 1;
-
   utterance.addEventListener("start", () => {
     speechStatus.textContent = "Speaking";
   });
-
   utterance.addEventListener("end", () => {
     speakingMessageId = null;
     speechStatus.textContent = "";
     renderMessages();
   });
-
   utterance.addEventListener("error", () => {
     speakingMessageId = null;
     speechStatus.textContent = "Audio unavailable";
     renderMessages();
   });
-
   speechSynthesisApi.speak(utterance);
 }
 
@@ -525,16 +746,13 @@ function setupSpeechRecognition() {
   speech.addEventListener("start", () => {
     transcriptAddedDuringListen = false;
     stopRequested = false;
-    if (speechSynthesisApi) {
-      speechSynthesisApi.cancel();
-    }
+    if (speechSynthesisApi) speechSynthesisApi.cancel();
     setListeningState(true, "Listening");
   });
 
   speech.addEventListener("result", (event) => {
     let interim = "";
     let finalText = "";
-
     for (let index = event.resultIndex; index < event.results.length; index += 1) {
       const transcript = event.results[index][0].transcript.trim();
       if (event.results[index].isFinal) {
@@ -543,29 +761,25 @@ function setupSpeechRecognition() {
         interim += transcript;
       }
     }
-
     if (finalText.trim()) {
       appendTranscript(finalText.trim());
       voiceInputPending = true;
       stopRequested = true;
       setListeningState(false, "Ready to send");
       window.setTimeout(() => {
-        try {
-          speech.stop();
-        } catch (error) {
+        try { speech.stop(); } catch (e) {
           setListeningState(false, "Ready to send");
         }
       }, 120);
     }
-
     if (!stopRequested) {
       speechStatus.textContent = interim || "Listening";
     }
   });
 
   speech.addEventListener("error", (event) => {
-    const message = event.error === "not-allowed" ? "Mic permission denied" : "Mic unavailable";
-    setListeningState(false, message);
+    const msg = event.error === "not-allowed" ? "Mic permission denied" : "Mic unavailable";
+    setListeningState(false, msg);
   });
 
   speech.addEventListener("end", () => {
@@ -584,6 +798,10 @@ function escapeHtml(value) {
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Event listeners
+// ─────────────────────────────────────────────────────────────────────────────
 
 chatForm.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -631,21 +849,14 @@ chatSearchButton.addEventListener("click", () => {
   const willOpen = chatSearch.hidden;
   chatSearch.hidden = !willOpen;
   chatSearchButton.setAttribute("aria-expanded", String(willOpen));
-
-  if (willOpen) {
-    chatSearchInput.focus();
-  }
+  if (willOpen) chatSearchInput.focus();
 });
 
 chatSearchInput.addEventListener("input", renderHistory);
 
 document.addEventListener("click", (event) => {
-  if (!sourcePicker.contains(event.target)) {
-    closeSourceMenu();
-  }
-  if (!accessibilityMenu.contains(event.target)) {
-    closeAccessibilityMenu();
-  }
+  if (!sourcePicker.contains(event.target)) closeSourceMenu();
+  if (!accessibilityMenu.contains(event.target)) closeAccessibilityMenu();
 });
 
 document.addEventListener("keydown", (event) => {
@@ -657,22 +868,10 @@ document.addEventListener("keydown", (event) => {
 });
 
 micButton.addEventListener("click", () => {
-  if (!recognition) {
-    recognition = setupSpeechRecognition();
-  }
-
-  if (!recognition) {
-    return;
-  }
-
-  if (isListening) {
-    recognition.stop();
-    return;
-  }
-
-  try {
-    recognition.start();
-  } catch (error) {
+  if (!recognition) recognition = setupSpeechRecognition();
+  if (!recognition) return;
+  if (isListening) { recognition.stop(); return; }
+  try { recognition.start(); } catch (e) {
     setListeningState(false, "Mic already active");
   }
 });
@@ -682,26 +881,17 @@ newChatButton.addEventListener("click", () => {
   createChat();
 });
 
-aboutButton.addEventListener("click", () => {
-  aboutModal.showModal();
-});
-
-closeAboutButton.addEventListener("click", () => {
-  aboutModal.close();
-});
-
+aboutButton.addEventListener("click", () => { aboutModal.showModal(); });
+closeAboutButton.addEventListener("click", () => { aboutModal.close(); });
 aboutModal.addEventListener("click", (event) => {
-  if (event.target === aboutModal) {
-    aboutModal.close();
-  }
+  if (event.target === aboutModal) aboutModal.close();
 });
 
 themeButton.addEventListener("click", () => {
   const isDark = document.body.classList.toggle("dark");
-  if (brandLogo) {
-    brandLogo.src = isDark ? DARK_LOGO_SRC : LIGHT_LOGO_SRC;
-  }
+  if (brandLogo) brandLogo.src = isDark ? DARK_LOGO_SRC : LIGHT_LOGO_SRC;
   themeButton.setAttribute("aria-label", isDark ? "Switch to light mode" : "Switch to dark mode");
 });
 
+// ── Boot ──────────────────────────────────────────────────────────────────────
 createChat();
