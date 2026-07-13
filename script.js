@@ -257,6 +257,21 @@ function getActiveChat() {
 function render() {
   renderHistory();
   renderMessages();
+  updateNewChatAvailability();
+}
+
+function updateNewChatAvailability() {
+  const chat = getActiveChat();
+  const hasUserMessage = Boolean(
+    chat?.messages.some((message) => message.role === "user")
+  );
+
+  newChatButton.disabled = !hasUserMessage;
+  if (hasUserMessage) {
+    newChatButton.removeAttribute("title");
+  } else {
+    newChatButton.title = "Send a message before starting a new chat";
+  }
 }
 
 function renderHistory() {
@@ -877,7 +892,12 @@ micButton.addEventListener("click", () => {
   }
 });
 
+
+
 newChatButton.addEventListener("click", () => {
+  const chat = getActiveChat();
+  if (!chat?.messages.some((message) => message.role === "user")) return;
+
   closeChatSearch(true);
   createChat();
 });
