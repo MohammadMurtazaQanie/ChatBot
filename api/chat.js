@@ -163,7 +163,8 @@ function formatRelevantSources(sources) {
 }
 
 function createSourceMismatchReply(selectedSource, relevantSources) {
-  return `You’ve selected ${selectedSource} as your source, but this question relates to ${formatRelevantSources(relevantSources)}. Please select All sources for a broader and more complete answer.`;
+  const relatedSources = formatRelevantSources(relevantSources);
+  return `You’ve selected ${selectedSource} as your source, but this question relates to ${relatedSources}. Please select All sources or ${relatedSources} for a relevant answer.`;
 }
 
 // ── Knowledge base loading ────────────────────────────────────────────────────
