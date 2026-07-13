@@ -67,6 +67,7 @@ const speechSynthesisApi  = window.speechSynthesis;
 const LIGHT_LOGO_SRC  = "assets/yps-ai-logo.png?v=20260624-logo";
 const DARK_LOGO_SRC   = "assets/yps-ai-logo-dark.png?v=20260624-darkgrey";
 const MAX_INPUT_LINES = 7;
+const MAX_HISTORY_MESSAGES = 8;
 const LOADING_MSG_ID  = "__loading__";
 
 const DOWNLOAD_ICON = `
@@ -95,7 +96,7 @@ if (copyrightYear) {
 async function callChatAPI(source, history, onDelta) {
   const apiMessages = history
     .filter((m) => m.id !== LOADING_MSG_ID)
-    .slice(-10)
+    .slice(-MAX_HISTORY_MESSAGES)
     .map((m) => ({ role: m.role, text: m.text }));
 
   const response = await fetch("/api/chat", {
@@ -184,43 +185,51 @@ function renderMarkdown(text) {
   // Inline citation markers [1], [2] → superscript
   html = html.replace(/\[(\d+)\]/g, "<sup class='cite'>[$1]</sup>");
 
-  // Split into lines for block-level processing
-  const lines = html.split("\n");
+  // Render block elements semantically so CSS controls spacing consistently.
+  const lines = html.replace(/\r\n?/g, "\n").split("\n");
   const out = [];
-  let inUL = false;
-  let inOL = false;
+  let paragraphLines = [];
+  let listType = null;
+
+  function flushParagraph() {
+    if (!paragraphLines.length) return;
+    out.push(`<p>${paragraphLines.join(" ")}</p>`);
+    paragraphLines = [];
+  }
+
+  function closeList() {
+    if (!listType) return;
+    out.push(`</${listType}>`);
+    listType = null;
+  }
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const ulMatch = line.match(/^[-*•]\s+(.+)/);
-    const olMatch = line.match(/^\d+\.\s+(.+)/);
+    const ulMatch = line.match(/^\s*[-*•]\s+(.+)/);
+    const olMatch = line.match(/^\s*\d+\.\s+(.+)/);
+    const match = ulMatch || olMatch;
 
-    if (ulMatch) {
-      if (!inUL) { out.push("<ul>"); inUL = true; }
-      if (inOL)  { out.push("</ol>"); inOL = false; }
-      out.push(`<li>${ulMatch[1]}</li>`);
-    } else if (olMatch) {
-      if (!inOL) { out.push("<ol>"); inOL = true; }
-      if (inUL)  { out.push("</ul>"); inUL = false; }
-      out.push(`<li>${olMatch[1]}</li>`);
-    } else {
-      if (inUL) { out.push("</ul>"); inUL = false; }
-      if (inOL) { out.push("</ol>"); inOL = false; }
-
-      if (line.trim() === "") {
-        // Paragraph break
-        if (out.length && out[out.length - 1] !== "<br>") out.push("<br>");
-      } else {
-        out.push(line);
-        out.push("<br>");
+    if (match) {
+      flushParagraph();
+      const nextListType = ulMatch ? "ul" : "ol";
+      if (listType !== nextListType) {
+        closeList();
+        out.push(`<${nextListType}>`);
+        listType = nextListType;
       }
+      out.push(`<li>${match[1]}</li>`);
+    } else if (line.trim() === "") {
+      flushParagraph();
+      closeList();
+    } else {
+      closeList();
+      paragraphLines.push(line.trim());
     }
   }
-  if (inUL) out.push("</ul>");
-  if (inOL) out.push("</ol>");
+  flushParagraph();
+  closeList();
 
-  // Clean up multiple consecutive <br>
-  return out.join("\n").replace(/(<br>\s*){3,}/g, "<br><br>");
+  return out.join("\n");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -233,7 +242,19 @@ function createId() {
     : String(Date.now());
 }
 
+function isChatEmpty(chat) {
+  return chat.messages.length === 0;
+}
+
 function createChat() {
+  const existingEmptyChat = chats.find(isChatEmpty);
+  if (existingEmptyChat) {
+    activeChatId = existingEmptyChat.id;
+    setActiveSource(existingEmptyChat.source, false);
+    render();
+    return existingEmptyChat;
+  }
+
   const chat = {
     id: createId(),
     title: "New conversation",
@@ -244,6 +265,7 @@ function createChat() {
   chats.unshift(chat);
   activeChatId = chat.id;
   render();
+  return chat;
 }
 
 function getActiveChat() {
@@ -261,17 +283,15 @@ function render() {
 }
 
 function updateNewChatAvailability() {
-  const chat = getActiveChat();
-  const hasUserMessage = Boolean(
-    chat?.messages.some((message) => message.role === "user")
-  );
+  const hasEmptyChat = chats.some(isChatEmpty);
 
-  newChatButton.disabled = !hasUserMessage;
-  if (hasUserMessage) {
-    newChatButton.removeAttribute("title");
-  } else {
-    newChatButton.title = "Send a message before starting a new chat";
+  newChatButton.disabled = hasEmptyChat;
+  if (hasEmptyChat) {
+    newChatButton.title = "An empty chat is already open";
+    return;
   }
+
+  newChatButton.removeAttribute("title");
 }
 
 function renderHistory() {
@@ -508,6 +528,15 @@ async function submitMessage(rawMessage, fromVoice = false) {
     isStreaming: true,
   };
   let streamStarted = false;
+  let streamRenderFrame = null;
+
+  function scheduleStreamingRender() {
+    if (streamRenderFrame !== null) return;
+    streamRenderFrame = window.requestAnimationFrame(() => {
+      streamRenderFrame = null;
+      updateStreamingMessage(chat, streamedReply);
+    });
+  }
 
   try {
     const reply = await callChatAPI(chat.source, chat.messages, (delta) => {
@@ -519,7 +548,7 @@ async function submitMessage(rawMessage, fromVoice = false) {
       }
 
       streamedReply.text += delta;
-      updateStreamingMessage(chat, streamedReply);
+      scheduleStreamingRender();
     });
 
     if (!streamStarted) {
@@ -546,6 +575,9 @@ async function submitMessage(rawMessage, fromVoice = false) {
     }
   }
 
+  if (streamRenderFrame !== null) {
+    window.cancelAnimationFrame(streamRenderFrame);
+  }
   render();
 }
 
@@ -895,9 +927,6 @@ micButton.addEventListener("click", () => {
 
 
 newChatButton.addEventListener("click", () => {
-  const chat = getActiveChat();
-  if (!chat?.messages.some((message) => message.role === "user")) return;
-
   closeChatSearch(true);
   createChat();
 });

@@ -1380,10 +1380,26 @@ body.dark .about-logo-dark {
 }
 
 /* ── Markdown rendering inside assistant bubbles ─────────────────────────── */
+.assistant .bubble p {
+  margin: 0;
+}
+
+.assistant .bubble p + p {
+  margin-top: 0.9em;
+}
+
 .assistant .bubble ul,
 .assistant .bubble ol {
-  margin: 6px 0 6px 1.4em;
+  margin: 0.75em 0 0.75em 1.4em;
   padding: 0;
+}
+
+.assistant .bubble > :first-child {
+  margin-top: 0;
+}
+
+.assistant .bubble > :last-child {
+  margin-bottom: 0;
 }
 
 .assistant .bubble li {
