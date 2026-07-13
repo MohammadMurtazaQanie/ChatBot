@@ -19,16 +19,6 @@ const SOURCE_NOTES = {
     "I am focusing on civil society and NGO publications, youth-led peacebuilding practice, advocacy, and local implementation lessons.",
 };
 
-// Map source picker values → knowledge base file keys
-const SOURCE_TO_KB_KEY = {
-  all: ["un-resolutions", "un-publications", "regional-org", "nap-strategies", "academic-research", "ngo-civil-society"],
-  "UN Resolutions & Frameworks": ["un-resolutions"],
-  "UN Publications": ["un-publications"],
-  "Regional Organizations Documents": ["regional-org"],
-  "National Action Plans and Strategies": ["nap-strategies"],
-  "Academic Research": ["academic-research"],
-  "Civil Society & NGO Publications": ["ngo-civil-society"],
-};
 
 const STARTER_PROMPTS = [
   "Summarize the Youth, Peace and Security agenda",
@@ -42,9 +32,7 @@ let chats = [];
 let activeChatId = null;
 let activeSource = "all";
 
-// ── Knowledge base cache (loaded lazily per category) ─────────────────────────
-const kbCache = {};       // { "academic-research": [...chunks], ... }
-const kbLoading = {};     // { "academic-research": Promise, ... }
+// (Knowledge base retrieval is handled server-side in api/chat.js)
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
 const chatList            = document.querySelector("#chatList");
@@ -101,97 +89,10 @@ if (copyrightYear) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Knowledge base helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** Load a single category JSON file, with deduplication via the promise cache. */
-function loadKBCategory(key) {
-  if (kbCache[key]) return Promise.resolve(kbCache[key]);
-  if (kbLoading[key]) return kbLoading[key];
-
-  kbLoading[key] = fetch(`knowledge/${key}.json`)
-    .then((r) => {
-      if (!r.ok) throw new Error(`${key}.json not found (${r.status})`);
-      return r.json();
-    })
-    .then((chunks) => {
-      kbCache[key] = chunks;
-      return chunks;
-    })
-    .catch((err) => {
-      console.warn(`[KB] Could not load ${key}:`, err.message);
-      kbCache[key] = [];
-      return [];
-    });
-
-  return kbLoading[key];
-}
-
-/** Load all category files required for the active source filter. */
-async function loadKBForSource(source) {
-  const keys = SOURCE_TO_KB_KEY[source] || SOURCE_TO_KB_KEY.all;
-  const results = await Promise.all(keys.map(loadKBCategory));
-  return results.flat();
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Retrieval — simple TF-IDF-style keyword scoring
-// ─────────────────────────────────────────────────────────────────────────────
-
-const STOP_WORDS = new Set([
-  "the","a","an","and","or","but","in","on","at","to","for","of","with",
-  "is","are","was","were","be","been","being","have","has","had","do","does",
-  "did","will","would","could","should","may","might","shall","can","that",
-  "this","these","those","it","its","we","our","they","their","you","your",
-  "i","my","he","she","his","her","as","by","from","not","no","so","if","about",
-]);
-
-function tokenize(text) {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
-    .split(/\s+/)
-    .filter((w) => w.length > 2 && !STOP_WORDS.has(w));
-}
-
-function scoreChunk(chunkText, queryTokens) {
-  const tokens = tokenize(chunkText);
-  const freq = {};
-  for (const t of tokens) freq[t] = (freq[t] || 0) + 1;
-
-  let score = 0;
-  for (const qt of queryTokens) {
-    if (freq[qt]) score += 1 + Math.log(freq[qt]);
-    // Partial prefix match (e.g. "youth" matches "youthful")
-    for (const t in freq) {
-      if (t !== qt && t.startsWith(qt)) score += 0.3;
-    }
-  }
-  return score;
-}
-
-function retrieveContext(chunks, query, topK = 5) {
-  if (!chunks.length) return [];
-  const queryTokens = tokenize(query);
-  if (!queryTokens.length) return [];
-
-  return chunks
-    .map((c) => ({ ...c, _score: scoreChunk(c.text, queryTokens) }))
-    .filter((c) => c._score > 0)
-    .sort((a, b) => b._score - a._score)
-    .slice(0, topK);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// API call
+// API call — retrieval is handled server-side in api/chat.js
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function callChatAPI(query, source, history) {
-  // Load and search the knowledge base
-  const allChunks = await loadKBForSource(source);
-  const context = retrieveContext(allChunks, query, 5);
-
-  // Build message history for the API (last 10 turns max to stay within limits)
   const apiMessages = history
     .filter((m) => m.id !== LOADING_MSG_ID)
     .slice(-10)
@@ -200,7 +101,7 @@ async function callChatAPI(query, source, history) {
   const response = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ messages: apiMessages, context, source }),
+    body: JSON.stringify({ messages: apiMessages, source }),
   });
 
   const data = await response.json();
