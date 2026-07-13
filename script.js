@@ -67,7 +67,7 @@ const speechSynthesisApi  = window.speechSynthesis;
 const LIGHT_LOGO_SRC  = "assets/yps-ai-logo.png?v=20260624-logo";
 const DARK_LOGO_SRC   = "assets/yps-ai-logo-dark.png?v=20260624-darkgrey";
 const MAX_INPUT_LINES = 7;
-const MAX_HISTORY_MESSAGES = 8;
+const MAX_HISTORY_MESSAGES = 21;
 const LOADING_MSG_ID  = "__loading__";
 
 const DOWNLOAD_ICON = `

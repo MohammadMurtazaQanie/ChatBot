@@ -19,7 +19,7 @@ import path from "path";
 
 // ── Module-level chunk cache (survives warm Lambda invocations) ───────────────
 const chunkCache = {};
-const MAX_HISTORY_MESSAGES = 8;
+const MAX_HISTORY_MESSAGES = 21;
 const MAX_CONTEXT_CHUNKS = 6;
 const MAX_CONTEXT_CHARS = 3500;
 const MAX_RESPONSE_TOKENS = 2400;
@@ -36,6 +36,63 @@ const SOURCE_TO_KEYS = {
 };
 
 const ALLOWED_SOURCES = new Set(Object.keys(SOURCE_TO_KEYS));
+const SPECIFIC_SOURCES = [...ALLOWED_SOURCES].filter((source) => source !== "all");
+
+const SOURCE_ROUTING_RULES = [
+  {
+    source: "UN Resolutions & Frameworks",
+    patterns: [
+      /\bUNSCR\b/i,
+      /\b(?:UN|United Nations)?\s*Security Council Resolution/i,
+      /\bResolution\s+(?:2250|2419|2535)\b/i,
+      /\b(?:2250|2419|2535)\b/,
+    ],
+  },
+  {
+    source: "UN Publications",
+    patterns: [
+      /\bUN publications?\b/i,
+      /\b(?:UN|United Nations) (?:report|guidance|handbook|study|publication)\b/i,
+      /\bSecretary-General(?:'s)? report\b/i,
+      /\bProgress Study\b/i,
+    ],
+  },
+  {
+    source: "Regional Organizations Documents",
+    patterns: [
+      /\bregional organi[sz]ations?\b/i,
+      /\b(?:African Union|European Union|ASEAN|OSCE|ECOWAS|IGAD|NATO|League of Arab States|Organization of American States)\b/i,
+    ],
+  },
+  {
+    source: "National Action Plans and Strategies",
+    patterns: [
+      /\bNational Action Plans?\b/i,
+      /\bNAPs?\b/,
+      /\bnational YPS strateg(?:y|ies)\b/i,
+    ],
+  },
+  {
+    source: "Academic Research",
+    patterns: [
+      /\bacademic research\b/i,
+      /\bpeer-reviewed\b/i,
+      /\b(?:empirical|scholarly) (?:research|evidence|study|literature)\b/i,
+      /\bliterature review\b/i,
+      /\b(?:research|evidence|studies|scholars?)\s+(?:on|about|says?|shows?|suggests?|finds?|indicates?)\b/i,
+    ],
+  },
+  {
+    source: "Civil Society & NGO Publications",
+    patterns: [
+      /\bcivil society\b/i,
+      /\bNGOs?\b/,
+      /\bgrassroots\b/i,
+      /\byouth-led organi[sz]ations?\b/i,
+      /\bcommunity-based organi[sz]ations?\b/i,
+    ],
+  },
+];
 
 // ── Abuse / out-of-scope patterns ─────────────────────────────────────────────
 const BLOCKED_PATTERNS = [
@@ -71,6 +128,42 @@ function isDeveloperQuestion(text) {
 function sanitize(text) {
   if (typeof text !== "string") return "";
   return text.slice(0, 4000).trim();
+}
+
+function isLikelyFollowUp(text) {
+  return (
+    /^(?:and|also|then|what about|how about|tell me more|continue|expand|elaborate|why\b|how so\b)/i.test(text) ||
+    /\b(?:it|its|this|that|these|those|they|them|their|former|latter|above|previous answer|previous point)\b/i.test(text)
+  );
+}
+
+function buildRetrievalQuery(messages) {
+  const userTexts = messages
+    .filter((message) => message.role !== "assistant")
+    .map((message) => sanitize(message.text))
+    .filter(Boolean);
+
+  const currentText = userTexts.at(-1) || "";
+  if (userTexts.length < 2 || !isLikelyFollowUp(currentText)) return currentText;
+
+  return userTexts.slice(-3).join("\n");
+}
+
+function getExplicitRelevantSources(query) {
+  return SOURCE_ROUTING_RULES
+    .filter((rule) => rule.patterns.some((pattern) => pattern.test(query)))
+    .map((rule) => rule.source);
+}
+
+function formatRelevantSources(sources) {
+  const uniqueSources = [...new Set(sources)];
+  if (uniqueSources.length === 1) return uniqueSources[0];
+  if (uniqueSources.length === 2) return `${uniqueSources[0]} and ${uniqueSources[1]}`;
+  return `${uniqueSources[0]}, ${uniqueSources[1]}, and other relevant sources`;
+}
+
+function createSourceMismatchReply(selectedSource, relevantSources) {
+  return `You’ve selected ${selectedSource} as your source, but this question relates to ${formatRelevantSources(relevantSources)}. Please select All sources for a broader and more complete answer.`;
 }
 
 // ── Knowledge base loading ────────────────────────────────────────────────────
@@ -139,7 +232,7 @@ function scoreChunk(chunkText, queryRoots, matcher) {
   return score;
 }
 
-function retrieveContext(source, query, topK = MAX_CONTEXT_CHUNKS) {
+function retrieveContextMatches(source, query, topK = MAX_CONTEXT_CHUNKS) {
   const chunks = getAllChunks(source);
   if (!chunks.length) return [];
 
@@ -167,7 +260,28 @@ function retrieveContext(source, query, topK = MAX_CONTEXT_CHUNKS) {
     }
   }
 
-  return topMatches.map((item) => item.chunk);
+  return topMatches;
+}
+
+function rankLikelySources(query, excludedSource) {
+  return SPECIFIC_SOURCES
+    .filter((source) => source !== excludedSource)
+    .map((source) => ({
+      source,
+      score: retrieveContextMatches(source, query, 1)[0]?.score || 0,
+    }))
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score);
+}
+
+function selectStrongestSources(rankedSources) {
+  if (!rankedSources.length) return [];
+
+  const strongestScore = rankedSources[0].score;
+  return rankedSources
+    .filter((item) => item.score >= strongestScore * 0.75)
+    .slice(0, 3)
+    .map((item) => item.source);
 }
 
 
@@ -263,7 +377,56 @@ export default async function handler(req, res) {
   if (isBlocked(lastUserText)) return sendStreamedText(res, BLOCK_REPLY);
 
   // ── Server-side retrieval ─────────────────────────────────────────────────
-  const context = retrieveContext(safeSource, lastUserText);
+  const retrievalQuery = buildRetrievalQuery(trimmedMessages);
+  const contextMatches = retrieveContextMatches(safeSource, retrievalQuery);
+  const context = contextMatches.map((item) => item.chunk);
+
+  if (safeSource !== "all") {
+    const explicitSources = getExplicitRelevantSources(retrievalQuery);
+    const explicitlyNeedsOtherSources = explicitSources.some(
+      (sourceName) => sourceName !== safeSource
+    );
+    const selectedSourceIsExplicitlyRelevant =
+      explicitSources.includes(safeSource) && !explicitlyNeedsOtherSources;
+    let relevantSources = explicitlyNeedsOtherSources
+      ? explicitSources.filter((sourceName) => sourceName !== safeSource)
+      : [];
+    const rankedOtherSources =
+      !relevantSources.length && !selectedSourceIsExplicitlyRelevant
+        ? rankLikelySources(retrievalQuery, safeSource)
+        : [];
+
+    if (
+      !relevantSources.length &&
+      !selectedSourceIsExplicitlyRelevant &&
+      context.length === 0
+    ) {
+      relevantSources = selectStrongestSources(rankedOtherSources);
+    }
+
+    if (
+      !relevantSources.length &&
+      !selectedSourceIsExplicitlyRelevant &&
+      rankedOtherSources.length
+    ) {
+      const selectedScore = contextMatches[0]?.score || 0;
+      const strongestOtherScore = rankedOtherSources[0].score;
+      const otherSourceIsClearlyStronger =
+        strongestOtherScore >= selectedScore * 1.8 &&
+        strongestOtherScore - selectedScore >= 2.5;
+
+      if (otherSourceIsClearlyStronger) {
+        relevantSources = selectStrongestSources(rankedOtherSources);
+      }
+    }
+
+    if (relevantSources.length) {
+      return sendStreamedText(
+        res,
+        createSourceMismatchReply(safeSource, relevantSources)
+      );
+    }
+  }
 
   // ── Build system prompt ───────────────────────────────────────────────────
   const isAllSources = safeSource === "all";
@@ -278,7 +441,7 @@ export default async function handler(req, res) {
 
   const sourceSelectionGuidance = isAllSources
     ? `- The user selected "All sources." You may synthesize across every provided source category and use established, stable general knowledge to explain concepts or fill limited gaps.`
-    : `- The user selected only "${safeSource}." Treat this as a strict source filter: use only excerpts from this selected category. Do not use other source categories, web material, or general knowledge to fill evidence gaps. If a complete answer requires broader evidence, answer the supported portion, explain the limitation, and say: "Please select All sources for a broader answer."`;
+    : `- The user selected only "${safeSource}." Treat this as a strict source filter: use only excerpts from this selected category. Do not use other source categories, web material, or general knowledge to fill evidence gaps. If the selected excerpts cannot support the requested answer, do not generate a substantive answer; explain that broader evidence is required and say: "Please select All sources for a broader and more complete answer."`;
 
   const contextGuidance = context.length > 0
     ? `- Relevant excerpts are available within the selected source scope. Synthesize the best supported answer from them, including evidence that is indirectly relevant. Do not say that no information was found when these excerpts can support a useful answer.`
@@ -294,6 +457,12 @@ DEVELOPER ATTRIBUTION
 - This attribution is approved public information. Do not add citations or a Sources line to this response.
 
 You are drawing from: ${sourceLabel}.${contextBlock}
+
+CONVERSATION MEMORY
+- Treat the supplied message history as one continuous conversation and remember facts, assumptions, questions, and conclusions already discussed in this chat.
+- Resolve follow-up wording such as "it," "this," "that," "they," or "tell me more" from the preceding turns instead of treating it as a new unrelated question.
+- Do not ask the user to repeat information that is already present in the supplied history.
+- The currently selected source rule still applies to every follow-up answer.
 
 SCOPE
 - Answer questions related to Youth, Peace and Security, including youth participation, protection, prevention, partnerships, disengagement and reintegration, peacebuilding, conflict prevention, mediation, governance, civic participation, inclusion, and National Action Plans.
