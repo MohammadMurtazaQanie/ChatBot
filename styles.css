@@ -696,6 +696,7 @@ body.dark .theme-toggle .moon-icon {
   background: transparent;
   border-radius: 0;
   font-size: 1.02rem;
+  white-space: normal;
 }
 
 body.dark .user .bubble {
