@@ -1349,6 +1349,29 @@ body.dark .about-logo-dark {
   30%            { transform: translateY(-6px); opacity: 1; }
 }
 
+.streaming-bubble::after {
+  content: "";
+  display: inline-block;
+  width: 2px;
+  height: 1.05em;
+  margin-left: 4px;
+  border-radius: 1px;
+  background: currentColor;
+  vertical-align: -0.16em;
+  animation: streamCursorBlink 0.8s steps(2, start) infinite;
+}
+
+@keyframes streamCursorBlink {
+  50% { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .typing-dot,
+  .streaming-bubble::after {
+    animation: none;
+  }
+}
+
 /* ── Markdown rendering inside assistant bubbles ─────────────────────────── */
 .assistant .bubble ul,
 .assistant .bubble ol {

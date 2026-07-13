@@ -92,7 +92,7 @@ if (copyrightYear) {
 // API call — retrieval is handled server-side in api/chat.js
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function callChatAPI(query, source, history) {
+async function callChatAPI(source, history, onDelta) {
   const apiMessages = history
     .filter((m) => m.id !== LOADING_MSG_ID)
     .slice(-10)
@@ -104,13 +104,63 @@ async function callChatAPI(query, source, history) {
     body: JSON.stringify({ messages: apiMessages, source }),
   });
 
-  const data = await response.json();
-
-  if (!response.ok || data.error) {
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
     throw new Error(data.error || `Server error (${response.status})`);
   }
 
-  return data.reply;
+  if (!response.body) {
+    throw new Error("Streaming is not supported by this browser.");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let reply = "";
+
+  function readEvent(line) {
+    if (!line.trim()) return;
+
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch (error) {
+      throw new Error("The server returned an invalid response stream.");
+    }
+
+    if (event.type === "error") {
+      throw new Error(event.error || "The response stream was interrupted.");
+    }
+
+    if (event.type === "delta" && typeof event.delta === "string") {
+      reply += event.delta;
+      onDelta(event.delta);
+    }
+  }
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() || "";
+      lines.forEach(readEvent);
+
+      if (done) break;
+    }
+
+    if (buffer.trim()) readEvent(buffer);
+  } catch (error) {
+    await reader.cancel().catch(() => {});
+    throw error;
+  }
+
+  if (!reply) {
+    throw new Error("No response generated.");
+  }
+
+  return reply.trim();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -302,9 +352,11 @@ function renderMessages() {
 
     const row = document.createElement("article");
     row.className = `message ${item.role}`;
+    row.dataset.messageId = item.id;
+    row.setAttribute("aria-busy", String(Boolean(item.isStreaming)));
 
     const bubble = document.createElement("div");
-    bubble.className = "bubble";
+    bubble.className = `bubble${item.isStreaming ? " streaming-bubble" : ""}`;
 
     if (item.role === "assistant") {
       bubble.innerHTML = renderMarkdown(item.text);
@@ -314,7 +366,7 @@ function renderMessages() {
 
     row.appendChild(bubble);
 
-    if (item.role === "assistant") {
+    if (item.role === "assistant" && !item.isStreaming) {
       const actionBar = document.createElement("div");
       actionBar.className = "message-actions";
 
@@ -356,6 +408,23 @@ function renderMessages() {
     messages.appendChild(row);
   });
 
+  messages.scrollTop = messages.scrollHeight;
+}
+
+function updateStreamingMessage(chat, item) {
+  if (activeChatId !== chat.id) return;
+
+  const row = Array.from(messages.querySelectorAll(".message")).find(
+    (element) => element.dataset.messageId === item.id
+  );
+  const bubble = row?.querySelector(".bubble");
+
+  if (!bubble) {
+    renderMessages();
+    return;
+  }
+
+  bubble.innerHTML = renderMarkdown(item.text);
   messages.scrollTop = messages.scrollHeight;
 }
 
@@ -416,19 +485,50 @@ async function submitMessage(rawMessage, fromVoice = false) {
   chat.messages.push({ id: LOADING_MSG_ID, role: "assistant", text: "" });
   render();
 
+  const streamedReply = {
+    id: createId(),
+    role: "assistant",
+    text: "",
+    fromVoice,
+    isStreaming: true,
+  };
+  let streamStarted = false;
+
   try {
-    const reply = await callChatAPI(text, chat.source, chat.messages);
-    // Remove loading indicator and add real reply
-    chat.messages = chat.messages.filter((m) => m.id !== LOADING_MSG_ID);
-    chat.messages.push({ id: createId(), role: "assistant", text: reply, fromVoice });
+    const reply = await callChatAPI(chat.source, chat.messages, (delta) => {
+      if (!streamStarted) {
+        chat.messages = chat.messages.filter((m) => m.id !== LOADING_MSG_ID);
+        chat.messages.push(streamedReply);
+        streamStarted = true;
+        if (activeChatId === chat.id) renderMessages();
+      }
+
+      streamedReply.text += delta;
+      updateStreamingMessage(chat, streamedReply);
+    });
+
+    if (!streamStarted) {
+      chat.messages = chat.messages.filter((m) => m.id !== LOADING_MSG_ID);
+      chat.messages.push(streamedReply);
+    }
+
+    streamedReply.text = reply;
+    streamedReply.isStreaming = false;
   } catch (err) {
     chat.messages = chat.messages.filter((m) => m.id !== LOADING_MSG_ID);
-    chat.messages.push({
-      id: createId(),
-      role: "assistant",
-      text: `⚠️ ${err.message || "Something went wrong. Please try again."}`,
-      fromVoice,
-    });
+    const errorText = `⚠️ ${err.message || "Something went wrong. Please try again."}`;
+
+    if (streamStarted) {
+      streamedReply.text = `${streamedReply.text}\n\n${errorText}`;
+      streamedReply.isStreaming = false;
+    } else {
+      chat.messages.push({
+        id: createId(),
+        role: "assistant",
+        text: errorText,
+        fromVoice,
+      });
+    }
   }
 
   render();

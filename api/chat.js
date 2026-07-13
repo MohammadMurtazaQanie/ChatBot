@@ -127,6 +127,29 @@ function retrieveContext(source, query, topK = 6) {
     .slice(0, topK);
 }
 
+// ── Browser response streaming ───────────────────────────────────────────────
+
+function startResponseStream(res) {
+  res.status(200);
+  res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("X-Accel-Buffering", "no");
+  if (typeof res.flushHeaders === "function") res.flushHeaders();
+}
+
+function writeStreamEvent(res, event) {
+  if (!res.writableEnded && !res.destroyed) {
+    res.write(`${JSON.stringify(event)}\n`);
+  }
+}
+
+function sendStreamedText(res, text) {
+  startResponseStream(res);
+  writeStreamEvent(res, { type: "delta", delta: text });
+  writeStreamEvent(res, { type: "done" });
+  return res.end();
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default async function handler(req, res) {
@@ -164,7 +187,7 @@ export default async function handler(req, res) {
   const lastUserText = sanitize(
     [...trimmedMessages].reverse().find((m) => m.role !== "assistant")?.text || ""
   );
-  if (isBlocked(lastUserText)) return res.json({ reply: BLOCK_REPLY });
+  if (isBlocked(lastUserText)) return sendStreamedText(res, BLOCK_REPLY);
 
   // ── Server-side retrieval ─────────────────────────────────────────────────
   const context = retrieveContext(safeSource, lastUserText, 6);
@@ -208,9 +231,16 @@ FORMAT
 
   // ── Call AI ───────────────────────────────────────────────────────────────
   let aiResponse;
+  const upstreamController = new AbortController();
+  const abortUpstream = () => {
+    if (!res.writableEnded) upstreamController.abort();
+  };
+  res.once("close", abortUpstream);
+
   try {
     aiResponse = await fetch(`${apiBase}/chat/completions`, {
       method: "POST",
+      signal: upstreamController.signal,
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
@@ -226,14 +256,18 @@ FORMAT
         ],
         max_tokens: 1500,
         temperature: 0.3,
+        stream: true,
       }),
     });
   } catch (err) {
+    res.off("close", abortUpstream);
+    if (err.name === "AbortError") return;
     console.error("Network error:", err);
     return res.status(502).json({ error: "Could not reach the AI service. Please try again." });
   }
 
   if (!aiResponse.ok) {
+    res.off("close", abortUpstream);
     const errText = await aiResponse.text();
     console.error(`AI API ${aiResponse.status}:`, errText);
     return res.status(aiResponse.status).json({
@@ -241,7 +275,65 @@ FORMAT
     });
   }
 
-  const data  = await aiResponse.json();
-  const reply = data.choices?.[0]?.message?.content?.trim() || "No response generated.";
-  return res.json({ reply });
+  if (!aiResponse.body) {
+    res.off("close", abortUpstream);
+    return res.status(502).json({ error: "The AI service did not return a response stream." });
+  }
+
+  startResponseStream(res);
+
+  const reader = aiResponse.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let receivedText = false;
+
+  function forwardUpstreamLine(line) {
+    const trimmedLine = line.trim();
+    if (!trimmedLine || trimmedLine.startsWith(":")) return;
+    if (!trimmedLine.startsWith("data:")) return;
+
+    const payload = trimmedLine.slice(5).trim();
+    if (!payload || payload === "[DONE]") return;
+
+    const event = JSON.parse(payload);
+    if (event.error) {
+      throw new Error(event.error.message || "The AI service interrupted the response.");
+    }
+
+    const delta = event.choices?.[0]?.delta?.content;
+    if (typeof delta === "string" && delta.length > 0) {
+      receivedText = true;
+      writeStreamEvent(res, { type: "delta", delta });
+    }
+  }
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() || "";
+      lines.forEach(forwardUpstreamLine);
+
+      if (done) break;
+    }
+
+    if (buffer.trim()) forwardUpstreamLine(buffer);
+    if (!receivedText) {
+      writeStreamEvent(res, { type: "delta", delta: "No response generated." });
+    }
+    writeStreamEvent(res, { type: "done" });
+  } catch (err) {
+    if (err.name !== "AbortError") {
+      console.error("Streaming error:", err);
+      writeStreamEvent(res, {
+        type: "error",
+        error: "The response stream was interrupted. Please try again.",
+      });
+    }
+  } finally {
+    res.off("close", abortUpstream);
+    if (!res.writableEnded && !res.destroyed) res.end();
+  }
 }
