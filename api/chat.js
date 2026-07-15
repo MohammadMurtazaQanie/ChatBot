@@ -7,11 +7,14 @@
  *   { messages: [{ role, text }], source: "all" | "Academic Research" | ..., language: "en" | "fr" | ... }
  *
  * Environment variables (Vercel dashboard → Settings → Environment Variables):
+ *   OPENROUTER_API_KEY — OpenRouter API key
  *   NVIDIA_API_KEY     — NVIDIA API key
  *   DEEPSEEK_API_KEY   — DeepSeek key  (starts with sk-)
  *   OPENAI_API_KEY     — OR OpenAI key
  *   AI_MODEL           — optional model override
  *   API_BASE_URL       — optional base URL override
+ *   OPENROUTER_SITE_URL — optional deployed site URL for OpenRouter attribution
+ *   OPENROUTER_APP_NAME — optional app name for OpenRouter attribution
  */
 
 import fs   from "fs";
@@ -319,7 +322,7 @@ function sendStreamedText(res, text) {
   return res.end();
 }
 
-async function translateQueryToEnglish({ query, language, apiBase, apiKey, model }) {
+async function translateQueryToEnglish({ query, language, apiBase, apiKey, model, providerHeaders }) {
   if (language.code === "en" || !query) return query;
 
   try {
@@ -328,6 +331,7 @@ async function translateQueryToEnglish({ query, language, apiBase, apiKey, model
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
+        ...providerHeaders,
       },
       body: JSON.stringify({
         model,
@@ -366,27 +370,35 @@ export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
   // ── API key ───────────────────────────────────────────────────────────────
-  const provider = process.env.NVIDIA_API_KEY
-    ? "nvidia"
-    : process.env.DEEPSEEK_API_KEY
-      ? "deepseek"
-      : process.env.OPENAI_API_KEY
-        ? "openai"
-        : null;
+  const provider = process.env.OPENROUTER_API_KEY
+    ? "openrouter"
+    : process.env.NVIDIA_API_KEY
+      ? "nvidia"
+      : process.env.DEEPSEEK_API_KEY
+        ? "deepseek"
+        : process.env.OPENAI_API_KEY
+          ? "openai"
+          : null;
 
-  const apiKey = provider === "nvidia"
-    ? process.env.NVIDIA_API_KEY
-    : provider === "deepseek"
-      ? process.env.DEEPSEEK_API_KEY
-      : process.env.OPENAI_API_KEY;
+  const apiKey = provider === "openrouter"
+    ? process.env.OPENROUTER_API_KEY
+    : provider === "nvidia"
+      ? process.env.NVIDIA_API_KEY
+      : provider === "deepseek"
+        ? process.env.DEEPSEEK_API_KEY
+        : process.env.OPENAI_API_KEY;
 
   if (!apiKey) {
     return res.status(500).json({
-      error: "Server is missing an API key. Set NVIDIA_API_KEY, DEEPSEEK_API_KEY, or OPENAI_API_KEY in Vercel environment variables.",
+      error: "Server is missing an API key. Set OPENROUTER_API_KEY, NVIDIA_API_KEY, DEEPSEEK_API_KEY, or OPENAI_API_KEY in Vercel environment variables.",
     });
   }
 
   const providerDefaults = {
+    openrouter: {
+      apiBase: "https://openrouter.ai/api/v1",
+      model: "nvidia/nemotron-3-super-120b-a12b:free",
+    },
     nvidia: {
       apiBase: "https://integrate.api.nvidia.com/v1",
       model: "z-ai/glm-5.2",
@@ -401,9 +413,18 @@ export default async function handler(req, res) {
     },
   };
 
+  const isOpenRouter = provider === "openrouter";
   const isNvidia = provider === "nvidia";
   const apiBase = process.env.API_BASE_URL || providerDefaults[provider].apiBase;
   const model = process.env.AI_MODEL || providerDefaults[provider].model;
+  const providerHeaders = isOpenRouter
+    ? {
+        ...(process.env.OPENROUTER_SITE_URL
+          ? { "HTTP-Referer": process.env.OPENROUTER_SITE_URL }
+          : {}),
+        "X-OpenRouter-Title": process.env.OPENROUTER_APP_NAME || "YPS AI",
+      }
+    : {};
 
   // ── Parse body ────────────────────────────────────────────────────────────
   const { messages = [], source = "all", language = "en" } = req.body || {};
@@ -435,6 +456,7 @@ export default async function handler(req, res) {
         apiBase,
         apiKey,
         model,
+        providerHeaders,
       });
   const contextMatches = blockedRequest
     ? []
@@ -622,6 +644,7 @@ FORMAT
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
+        ...providerHeaders,
       },
       body: JSON.stringify({
         model,

@@ -24,6 +24,9 @@ class StreamingResponse extends EventEmitter {
 
 function saveProviderEnvironment() {
   return {
+    OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
+    OPENROUTER_SITE_URL: process.env.OPENROUTER_SITE_URL,
+    OPENROUTER_APP_NAME: process.env.OPENROUTER_APP_NAME,
     NVIDIA_API_KEY: process.env.NVIDIA_API_KEY,
     DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY,
     OPENAI_API_KEY: process.env.OPENAI_API_KEY,
@@ -40,6 +43,9 @@ function restoreProviderEnvironment(original) {
 }
 
 function useOpenAITestProvider() {
+  delete process.env.OPENROUTER_API_KEY;
+  delete process.env.OPENROUTER_SITE_URL;
+  delete process.env.OPENROUTER_APP_NAME;
   delete process.env.NVIDIA_API_KEY;
   delete process.env.DEEPSEEK_API_KEY;
   delete process.env.API_BASE_URL;
@@ -196,6 +202,9 @@ test("model and API questions receive the humorous security-response guidance", 
 test("NVIDIA credentials select the NVIDIA endpoint and GLM streaming settings", async () => {
   const originalFetch = globalThis.fetch;
   const originalEnvironment = saveProviderEnvironment();
+  delete process.env.OPENROUTER_API_KEY;
+  delete process.env.OPENROUTER_SITE_URL;
+  delete process.env.OPENROUTER_APP_NAME;
   process.env.NVIDIA_API_KEY = "test-nvidia-key";
   delete process.env.DEEPSEEK_API_KEY;
   delete process.env.OPENAI_API_KEY;
@@ -225,6 +234,48 @@ test("NVIDIA credentials select the NVIDIA endpoint and GLM streaming settings",
     assert.equal(requests[0].body.max_tokens, 16384);
     assert.equal(requests[0].body.top_p, 1);
     assert.equal(requests[0].body.seed, 42);
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreProviderEnvironment(originalEnvironment);
+  }
+});
+
+test("OpenRouter credentials select the Nemotron free model and attribution headers", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalEnvironment = saveProviderEnvironment();
+  process.env.OPENROUTER_API_KEY = "test-openrouter-key";
+  process.env.OPENROUTER_SITE_URL = "https://example.vercel.app";
+  process.env.OPENROUTER_APP_NAME = "YPS AI";
+  delete process.env.NVIDIA_API_KEY;
+  delete process.env.DEEPSEEK_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+  delete process.env.API_BASE_URL;
+  delete process.env.AI_MODEL;
+  const requests = [];
+  globalThis.fetch = async (url, options) => {
+    requests.push({ url, headers: options.headers, body: JSON.parse(options.body) });
+    return streamedAIResponse();
+  };
+
+  try {
+    const req = {
+      method: "POST",
+      body: {
+        language: "en",
+        source: "all",
+        messages: [{ role: "user", text: "Explain youth participation in peacebuilding." }],
+      },
+    };
+    const res = new StreamingResponse();
+    await chatHandler(req, res);
+
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].url, "https://openrouter.ai/api/v1/chat/completions");
+    assert.equal(requests[0].headers.Authorization, "Bearer test-openrouter-key");
+    assert.equal(requests[0].headers["HTTP-Referer"], "https://example.vercel.app");
+    assert.equal(requests[0].headers["X-OpenRouter-Title"], "YPS AI");
+    assert.equal(requests[0].body.model, "nvidia/nemotron-3-super-120b-a12b:free");
+    assert.equal(requests[0].body.stream, true);
   } finally {
     globalThis.fetch = originalFetch;
     restoreProviderEnvironment(originalEnvironment);
