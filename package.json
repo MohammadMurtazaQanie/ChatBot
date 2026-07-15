@@ -2,6 +2,11 @@
   "name": "yps-ai",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build-browser.js",
+    "test": "npm run build && node --test"
+  },
   "engines": {
     "node": ">=18"
   }

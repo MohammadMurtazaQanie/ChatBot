@@ -2,35 +2,35 @@
 // YPS AI — frontend script
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { ENGLISH_UI, getLanguage, LANGUAGES } from "./i18n.js";
+
 // ── Source labels ─────────────────────────────────────────────────────────────
-const SOURCE_NOTES = {
-  all: "I am considering all configured YPS source groups together.",
-  "UN Resolutions & Frameworks":
-    "I am focusing on UN resolutions, frameworks, and peace and security commitments relevant to YPS.",
-  "UN Publications":
-    "I am focusing on UN publications, guidance, policy briefs, and system-wide YPS learning.",
-  "Regional Organizations Documents":
-    "I am focusing on regional organization documents, strategies, declarations, and guidance related to YPS.",
-  "National Action Plans and Strategies":
-    "I am focusing on National Action Plans, strategies, and how public institutions translate YPS commitments into action.",
-  "Academic Research":
-    "I am focusing on academic research, evidence, concepts, methods, and debates relevant to YPS.",
-  "Civil Society & NGO Publications":
-    "I am focusing on civil society and NGO publications, youth-led peacebuilding practice, advocacy, and local implementation lessons.",
+const SOURCE_TRANSLATION_KEYS = {
+  all: "sourceAll",
+  "UN Resolutions & Frameworks": "sourceUNResolutions",
+  "UN Publications": "sourceUNPublications",
+  "Regional Organizations Documents": "sourceRegional",
+  "National Action Plans and Strategies": "sourceNAP",
+  "Academic Research": "sourceAcademic",
+  "Civil Society & NGO Publications": "sourceCivilSociety",
 };
 
-
 const STARTER_PROMPTS = [
-  "Summarize the Youth, Peace and Security agenda",
-  "What are the best ways to include youth in decision-making?",
-  "Draft project ideas for local peacebuilding in Central Asia",
-  "What are the stages of developing a National Action Plan?",
+  "starter1",
+  "starter2",
+  "starter3",
+  "starter4",
 ];
+
+const LANGUAGE_STORAGE_KEY = "yps-ai-language";
 
 // ── Chat state ────────────────────────────────────────────────────────────────
 let chats = [];
 let activeChatId = null;
 let activeSource = "all";
+let activeLanguageCode = "en";
+let activeLanguage = getLanguage("en");
+let currentUI = { ...ENGLISH_UI };
 
 // (Knowledge base retrieval is handled server-side in api/chat.js)
 
@@ -39,6 +39,8 @@ const chatList            = document.querySelector("#chatList");
 const chatSearchButton    = document.querySelector("#chatSearchButton");
 const chatSearch          = document.querySelector("#chatSearch");
 const chatSearchInput     = document.querySelector("#chatSearchInput");
+const sidebar             = document.querySelector(".sidebar");
+const mobileHistoryButton = document.querySelector("#mobileHistoryButton");
 const messages            = document.querySelector("#messages");
 const activeTitle         = document.querySelector("#activeTitle");
 const brandLogo           = document.querySelector(".brand-logo");
@@ -57,6 +59,14 @@ const closeAboutButton    = document.querySelector("#closeAboutButton");
 const themeButton         = document.querySelector("#themeButton");
 const accessibilityMenu   = document.querySelector("#accessibilityMenu");
 const accessibilityButton = document.querySelector("#accessibilityButton");
+const languageMenu        = document.querySelector("#languageMenu");
+const languageButton      = document.querySelector("#languageButton");
+const languagePanel       = document.querySelector("#languagePanel");
+const languageSearch      = document.querySelector("#languageSearch");
+const languageList        = document.querySelector("#languageList");
+const languageStatus      = document.querySelector("#languageStatus");
+const languageCurrent     = document.querySelector("#languageCurrent");
+const currentLanguageName = document.querySelector("#currentLanguageName");
 const largeTextToggle     = document.querySelector("#largeTextToggle");
 const contrastToggle      = document.querySelector("#contrastToggle");
 const colorBlindToggle    = document.querySelector("#colorBlindToggle");
@@ -89,11 +99,168 @@ if (copyrightYear) {
   copyrightYear.textContent = new Date().getFullYear();
 }
 
+let languageRequestId = 0;
+
+function interpolate(template, values = {}) {
+  return String(template || "").replace(/\{(\w+)\}/g, (match, key) =>
+    Object.prototype.hasOwnProperty.call(values, key) ? String(values[key]) : match
+  );
+}
+
+function t(key, values) {
+  return interpolate(currentUI[key] || ENGLISH_UI[key] || key, values);
+}
+
+function readStoredLanguage() {
+  try {
+    return window.localStorage.getItem(LANGUAGE_STORAGE_KEY) || "en";
+  } catch (error) {
+    return "en";
+  }
+}
+
+function storeLanguage(code) {
+  try {
+    window.localStorage.setItem(LANGUAGE_STORAGE_KEY, code);
+  } catch (error) {
+    // The preference remains active for this page even if storage is unavailable.
+  }
+}
+
+function renderLanguageList(query = "") {
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const visibleLanguages = LANGUAGES.filter((language) =>
+    `${language.name} ${language.nativeName}`.toLocaleLowerCase().includes(normalizedQuery)
+  );
+
+  languageList.innerHTML = "";
+  if (!visibleLanguages.length) {
+    const empty = document.createElement("p");
+    empty.className = "language-empty";
+    empty.textContent = t("noLanguages");
+    languageList.appendChild(empty);
+    return;
+  }
+
+  visibleLanguages.forEach((language) => {
+    const button = document.createElement("button");
+    const selected = language.code === activeLanguageCode;
+    button.type = "button";
+    button.className = `language-option${selected ? " selected" : ""}`;
+    button.dataset.language = language.code;
+    button.setAttribute("role", "option");
+    button.setAttribute("aria-selected", String(selected));
+    const nativeName = document.createElement("span");
+    nativeName.className = "language-native-name";
+    nativeName.textContent = language.nativeName;
+    nativeName.dir = language.dir;
+
+    button.appendChild(nativeName);
+    button.addEventListener("click", async () => {
+      const loaded = await setLanguage(language.code);
+      if (loaded) closeLanguageMenu();
+    });
+    languageList.appendChild(button);
+  });
+}
+
+function applyTranslations() {
+  document.documentElement.lang = activeLanguage.code;
+  document.documentElement.dir = "ltr";
+  document.body.classList.toggle("rtl-text", activeLanguage.dir === "rtl");
+
+  document.querySelectorAll("[data-i18n]").forEach((element) => {
+    element.textContent = t(element.dataset.i18n);
+    element.dir = activeLanguage.dir;
+  });
+  document.querySelectorAll("[data-i18n-placeholder]").forEach((element) => {
+    element.setAttribute("placeholder", t(element.dataset.i18nPlaceholder));
+    element.dir = activeLanguage.dir;
+  });
+  document.querySelectorAll("[data-i18n-aria-label]").forEach((element) => {
+    element.setAttribute("aria-label", t(element.dataset.i18nAriaLabel));
+  });
+  document.querySelector(".privacy-details").dir = activeLanguage.dir;
+
+  languageCurrent.textContent = activeLanguage.nativeName;
+  languageCurrent.dir = activeLanguage.dir;
+  currentLanguageName.textContent = activeLanguage.nativeName;
+  languageButton.title = `${t("language")}: ${activeLanguage.nativeName}`;
+  languageButton.setAttribute("aria-label", `${t("chooseLanguage")}: ${activeLanguage.nativeName}`);
+  themeButton.setAttribute("aria-label", document.body.classList.contains("dark") ? t("switchLight") : t("switchDark"));
+  micButton.setAttribute("aria-label", isListening ? t("stopSpeech") : t("startSpeech"));
+  chats.forEach((chat) => {
+    if (chat.isUntitled) chat.title = t("newConversation");
+  });
+
+  if (recognition) recognition.lang = activeLanguage.speech;
+  renderLanguageList(languageSearch.value);
+  setActiveSource(activeSource, false);
+  render();
+}
+
+function loadTranslations(code) {
+  if (code === "en") return { ...ENGLISH_UI };
+
+  const bundled = STATIC_LOCALES[code];
+  if (!bundled || typeof bundled !== "object") {
+    throw new Error(`Bundled locale is missing: ${code}`);
+  }
+  const complete = Object.keys(ENGLISH_UI).every(
+    (key) => typeof bundled[key] === "string" && bundled[key].trim()
+  );
+  if (!complete) throw new Error("Bundled locale is incomplete");
+  return { ...ENGLISH_UI, ...bundled };
+}
+
+async function setLanguage(code, { initial = false } = {}) {
+  const language = LANGUAGES.find((item) => item.code === code) || getLanguage("en");
+  const requestId = ++languageRequestId;
+
+  activeLanguageCode = language.code;
+  activeLanguage = language;
+  storeLanguage(language.code);
+  document.documentElement.lang = language.code;
+  document.documentElement.dir = "ltr";
+  document.body.classList.toggle("rtl-text", language.dir === "rtl");
+  languageCurrent.textContent = language.nativeName;
+  languageCurrent.dir = language.dir;
+  currentLanguageName.textContent = language.nativeName;
+  renderLanguageList(languageSearch.value);
+
+  languageButton.disabled = true;
+  languagePanel.setAttribute("aria-busy", "true");
+  languageStatus.classList.remove("error");
+  languageStatus.textContent = "";
+
+  let translationLoaded = false;
+  try {
+    currentUI = loadTranslations(language.code);
+    if (requestId !== languageRequestId) return;
+    translationLoaded = true;
+    languageStatus.textContent = "";
+  } catch (error) {
+    if (requestId !== languageRequestId) return;
+    console.error("Could not load interface translation:", error);
+    currentUI = { ...ENGLISH_UI };
+    languageStatus.classList.add("error");
+    languageStatus.textContent = t("genericError");
+  } finally {
+    if (requestId === languageRequestId) {
+      languageButton.disabled = false;
+      languagePanel.removeAttribute("aria-busy");
+      applyTranslations();
+      if (!initial) messageInput.focus();
+    }
+  }
+  return translationLoaded;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // API call — retrieval is handled server-side in api/chat.js
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function callChatAPI(source, history, onDelta) {
+async function callChatAPI(source, history, onDelta, languageCode = activeLanguageCode) {
   const apiMessages = history
     .filter((m) => m.id !== LOADING_MSG_ID)
     .slice(-MAX_HISTORY_MESSAGES)
@@ -102,16 +269,21 @@ async function callChatAPI(source, history, onDelta) {
   const response = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ messages: apiMessages, source }),
+    body: JSON.stringify({
+      messages: apiMessages,
+      source,
+      language: languageCode,
+    }),
   });
 
   if (!response.ok) {
     const data = await response.json().catch(() => ({}));
-    throw new Error(data.error || `Server error (${response.status})`);
+    const localizedError = t("serverError", { status: response.status });
+    throw new Error(activeLanguageCode === "en" ? data.error || localizedError : localizedError);
   }
 
   if (!response.body) {
-    throw new Error("Streaming is not supported by this browser.");
+    throw new Error(t("streamUnsupported"));
   }
 
   const reader = response.body.getReader();
@@ -126,11 +298,11 @@ async function callChatAPI(source, history, onDelta) {
     try {
       event = JSON.parse(line);
     } catch (error) {
-      throw new Error("The server returned an invalid response stream.");
+      throw new Error(t("invalidStream"));
     }
 
     if (event.type === "error") {
-      throw new Error(event.error || "The response stream was interrupted.");
+      throw new Error(activeLanguageCode === "en" ? event.error || t("streamInterrupted") : t("streamInterrupted"));
     }
 
     if (event.type === "delta" && typeof event.delta === "string") {
@@ -158,7 +330,7 @@ async function callChatAPI(source, history, onDelta) {
   }
 
   if (!reply) {
-    throw new Error("No response generated.");
+    throw new Error(t("noResponse"));
   }
 
   return reply.trim();
@@ -257,7 +429,8 @@ function createChat() {
 
   const chat = {
     id: createId(),
-    title: "New conversation",
+    title: t("newConversation"),
+    isUntitled: true,
     source: "all",
     messages: [],
     createdAt: new Date(),
@@ -287,7 +460,7 @@ function updateNewChatAvailability() {
 
   newChatButton.disabled = hasEmptyChat;
   if (hasEmptyChat) {
-    newChatButton.title = "An empty chat is already open";
+    newChatButton.title = t("newChatDisabledTitle");
     return;
   }
 
@@ -314,7 +487,7 @@ function renderHistory() {
   if (query && visibleChats.length === 0) {
     const empty = document.createElement("p");
     empty.className = "history-empty";
-    empty.textContent = "No matching chats";
+    empty.textContent = t("noMatchingChats");
     chatList.appendChild(empty);
     return;
   }
@@ -328,20 +501,23 @@ function renderHistory() {
     button.className = "chat-item";
     button.innerHTML = `
       <strong>${escapeHtml(chat.title)}</strong>
-      <span>${chat.messages.length} messages - ${escapeHtml(
-        chat.source === "all" ? "All sources" : chat.source
+      <span>${chat.messages.length} · ${escapeHtml(t("messages"))} — ${escapeHtml(
+        getSourceName(chat.source)
       )}</span>
     `;
+    button.querySelector("strong").dir = "auto";
+    button.querySelector("span").dir = activeLanguage.dir;
     button.addEventListener("click", () => {
       activeChatId = chat.id;
       setActiveSource(chat.source, false);
+      closeMobileHistory();
       render();
     });
 
     const downloadButton = document.createElement("button");
     downloadButton.type = "button";
     downloadButton.className = "download-button chat-download";
-    downloadButton.setAttribute("aria-label", `Download ${chat.title} conversation`);
+    downloadButton.setAttribute("aria-label", t("downloadConversation", { title: chat.title }));
     downloadButton.innerHTML = DOWNLOAD_ICON;
     downloadButton.disabled = chat.messages.length === 0;
     downloadButton.addEventListener("click", () => downloadChat(chat));
@@ -356,7 +532,7 @@ function renderMessages() {
   messages.innerHTML = "";
 
   if (!chat) {
-    if (activeTitle) activeTitle.textContent = "New conversation";
+    if (activeTitle) activeTitle.textContent = t("newConversation");
     return;
   }
 
@@ -375,7 +551,7 @@ function renderMessages() {
       row.className = "message assistant";
       row.id = "loadingMessage";
       row.innerHTML = `
-        <div class="bubble typing-bubble" aria-label="Searching sources and generating answer">
+        <div class="bubble typing-bubble" aria-label="${escapeHtml(t("searchingAnswer"))}">
           <span class="typing-dot"></span>
           <span class="typing-dot"></span>
           <span class="typing-dot"></span>
@@ -392,6 +568,13 @@ function renderMessages() {
 
     const bubble = document.createElement("div");
     bubble.className = `bubble${item.isStreaming ? " streaming-bubble" : ""}`;
+    if (item.role === "assistant" && item.language) {
+      const messageLanguage = getLanguage(item.language);
+      bubble.lang = messageLanguage.code;
+      bubble.dir = messageLanguage.dir;
+    } else {
+      bubble.dir = "auto";
+    }
 
     if (item.role === "assistant") {
       bubble.innerHTML = renderMarkdown(item.text);
@@ -408,7 +591,7 @@ function renderMessages() {
       const answerDownload = document.createElement("button");
       answerDownload.type = "button";
       answerDownload.className = "download-button answer-download";
-      answerDownload.setAttribute("aria-label", "Download this answer");
+      answerDownload.setAttribute("aria-label", t("downloadAnswer"));
       answerDownload.innerHTML = DOWNLOAD_ICON;
       answerDownload.addEventListener("click", () => downloadAnswer(chat, item));
       actionBar.appendChild(answerDownload);
@@ -420,8 +603,8 @@ function renderMessages() {
         listenButton.setAttribute(
           "aria-label",
           speakingMessageId === item.id
-            ? "Stop listening to this answer"
-            : "Listen to this answer"
+            ? t("stopListening")
+            : t("listenAnswer")
         );
         listenButton.innerHTML = `
           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -431,7 +614,7 @@ function renderMessages() {
                 : '<path d="M4 9v6h4l5 4V5L8 9H4Z" /><path d="M16 9.5a4 4 0 0 1 0 5M18.5 7a7.5 7.5 0 0 1 0 10" />'
             }
           </svg>
-          ${speakingMessageId === item.id ? "Stop" : "Listen"}
+          ${speakingMessageId === item.id ? escapeHtml(t("stop")) : escapeHtml(t("listen"))}
         `;
         listenButton.addEventListener("click", () => toggleAssistantAudio(item));
         actionBar.appendChild(listenButton);
@@ -469,15 +652,17 @@ function createEmptyState() {
 
   const inner = document.createElement("div");
   inner.className = "empty-state-inner";
+  inner.dir = activeLanguage.dir;
   inner.innerHTML = `
     <div class="mark" aria-hidden="true"></div>
-    <h2><span>Ask focused questions about</span><span>Youth, Peace and Security.</span></h2>
-    <p>Choose a source group and start a conversation.</p>
+    <h2>${escapeHtml(t("emptyHeading"))}</h2>
+    <p>${escapeHtml(t("emptySubtitle"))}</p>
     <div class="prompt-chips"></div>
   `;
 
   const chipBox = inner.querySelector(".prompt-chips");
-  STARTER_PROMPTS.forEach((prompt) => {
+  STARTER_PROMPTS.forEach((promptKey) => {
+    const prompt = t(promptKey);
     const button = document.createElement("button");
     button.type = "button";
     button.className = "prompt-chip";
@@ -507,10 +692,12 @@ async function submitMessage(rawMessage, fromVoice = false) {
   }
 
   chat.source = activeSource;
-  chat.messages.push({ id: createId(), role: "user", text, fromVoice });
+  const responseLanguageCode = activeLanguageCode;
+  chat.messages.push({ id: createId(), role: "user", text, fromVoice, language: responseLanguageCode });
 
-  if (chat.title === "New conversation") {
+  if (chat.isUntitled) {
     chat.title = createTitle(text);
+    chat.isUntitled = false;
   }
 
   messageInput.value = "";
@@ -525,6 +712,7 @@ async function submitMessage(rawMessage, fromVoice = false) {
     role: "assistant",
     text: "",
     fromVoice,
+    language: responseLanguageCode,
     isStreaming: true,
   };
   let streamStarted = false;
@@ -549,7 +737,7 @@ async function submitMessage(rawMessage, fromVoice = false) {
 
       streamedReply.text += delta;
       scheduleStreamingRender();
-    });
+    }, responseLanguageCode);
 
     if (!streamStarted) {
       chat.messages = chat.messages.filter((m) => m.id !== LOADING_MSG_ID);
@@ -560,7 +748,7 @@ async function submitMessage(rawMessage, fromVoice = false) {
     streamedReply.isStreaming = false;
   } catch (err) {
     chat.messages = chat.messages.filter((m) => m.id !== LOADING_MSG_ID);
-    const errorText = `⚠️ ${err.message || "Something went wrong. Please try again."}`;
+    const errorText = `⚠️ ${err.message || t("genericError")}`;
 
     if (streamStarted) {
       streamedReply.text = `${streamedReply.text}\n\n${errorText}`;
@@ -571,6 +759,7 @@ async function submitMessage(rawMessage, fromVoice = false) {
         role: "assistant",
         text: errorText,
         fromVoice,
+        language: responseLanguageCode,
       });
     }
   }
@@ -599,7 +788,7 @@ function sanitizeFileName(value) {
 }
 
 function formatDate(value) {
-  return new Intl.DateTimeFormat("en", {
+  return new Intl.DateTimeFormat(activeLanguage.code, {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(value instanceof Date ? value : new Date(value));
@@ -607,9 +796,9 @@ function formatDate(value) {
 
 function createTextFile(title, lines) {
   return [
-    `Website: YPS AI`,
-    `Date: ${formatDate(new Date())}`,
-    `Title: ${title}`,
+    `${t("website")}: YPS AI`,
+    `${t("date")}: ${formatDate(new Date())}`,
+    `${t("title")}: ${title}`,
     "",
     ...lines,
     "",
@@ -628,18 +817,18 @@ function downloadTextFile(fileName, text) {
 }
 
 function downloadAnswer(chat, message) {
-  const title = `${chat.title} - Answer`;
+  const title = `${chat.title} - ${t("answer")}`;
   const messageIndex = chat.messages.findIndex((m) => m.id === message.id);
   const prompt = [...chat.messages]
     .slice(0, messageIndex)
     .reverse()
     .find((m) => m.role === "user");
   const lines = [
-    `Source: ${getSourceName(chat.source)}`,
+    `${t("source")}: ${getSourceName(chat.source)}`,
     "",
-    `You: ${prompt ? prompt.text : ""}`,
+    `${t("you")}: ${prompt ? prompt.text : ""}`,
     "",
-    `Answer: ${message.text}`,
+    `${t("answer")}: ${message.text}`,
   ];
   downloadTextFile(title, createTextFile(title, lines));
 }
@@ -647,13 +836,13 @@ function downloadAnswer(chat, message) {
 function downloadChat(chat) {
   if (!chat.messages.length) return;
   const lines = [
-    `Source: ${getSourceName(chat.source)}`,
-    `Created: ${formatDate(chat.createdAt)}`,
+    `${t("source")}: ${getSourceName(chat.source)}`,
+    `${t("created")}: ${formatDate(chat.createdAt)}`,
     "",
     ...chat.messages
       .filter((m) => m.id !== LOADING_MSG_ID)
       .flatMap((m) => {
-        const label = m.role === "user" ? "You" : "Answer";
+        const label = m.role === "user" ? t("you") : t("answer");
         return [`${label}: ${m.text}`, ""];
       }),
   ];
@@ -675,12 +864,13 @@ function resizeInput() {
 }
 
 function getSourceName(source) {
-  return source === "all" ? "All sources" : source;
+  return t(SOURCE_TRANSLATION_KEYS[source] || "sourceAll");
 }
 
 function setActiveSource(source, updateChat = true) {
   activeSource = source;
   sourceLabel.textContent = getSourceName(source);
+  sourceLabel.dir = activeLanguage.dir;
 
   sourceOptions.forEach((option) => {
     const isSelected = option.dataset.source === source;
@@ -707,6 +897,15 @@ function closeAccessibilityMenu() {
   accessibilityButton.setAttribute("aria-expanded", "false");
 }
 
+function closeLanguageMenu(clearSearch = false) {
+  languageMenu.classList.remove("open");
+  languageButton.setAttribute("aria-expanded", "false");
+  if (clearSearch && languageSearch.value) {
+    languageSearch.value = "";
+    renderLanguageList();
+  }
+}
+
 function closeChatSearch(clearQuery = false) {
   chatSearch.hidden = true;
   chatSearchButton.setAttribute("aria-expanded", "false");
@@ -716,12 +915,17 @@ function closeChatSearch(clearQuery = false) {
   }
 }
 
+function closeMobileHistory() {
+  sidebar.classList.remove("history-open");
+  mobileHistoryButton.setAttribute("aria-expanded", "false");
+}
+
 function setListeningState(nextState, status = "") {
   isListening = nextState;
   micButton.classList.toggle("listening", nextState);
   micButton.setAttribute(
     "aria-label",
-    nextState ? "Stop speech to text" : "Start speech to text"
+    nextState ? t("stopSpeech") : t("startSpeech")
   );
   speechStatus.textContent = status;
 }
@@ -751,7 +955,7 @@ function stopAssistantAudio() {
 
 function speakAssistantReply(text, messageId) {
   if (!speechSynthesisApi) {
-    speechStatus.textContent = "Audio not supported";
+    speechStatus.textContent = t("audioNotSupported");
     return;
   }
   speechSynthesisApi.cancel();
@@ -760,11 +964,11 @@ function speakAssistantReply(text, messageId) {
   const utterance = new SpeechSynthesisUtterance(
     text.replace(/\s+/g, " ").trim()
   );
-  utterance.lang = "en-US";
+  utterance.lang = activeLanguage.speech;
   utterance.rate = 0.96;
   utterance.pitch = 1;
   utterance.addEventListener("start", () => {
-    speechStatus.textContent = "Speaking";
+    speechStatus.textContent = t("speaking");
   });
   utterance.addEventListener("end", () => {
     speakingMessageId = null;
@@ -773,7 +977,7 @@ function speakAssistantReply(text, messageId) {
   });
   utterance.addEventListener("error", () => {
     speakingMessageId = null;
-    speechStatus.textContent = "Audio unavailable";
+    speechStatus.textContent = t("audioUnavailable");
     renderMessages();
   });
   speechSynthesisApi.speak(utterance);
@@ -781,7 +985,7 @@ function speakAssistantReply(text, messageId) {
 
 function setupSpeechRecognition() {
   if (!SpeechRecognition) {
-    speechStatus.textContent = "Speech not supported";
+    speechStatus.textContent = t("speechNotSupported");
     micButton.disabled = true;
     return null;
   }
@@ -789,13 +993,13 @@ function setupSpeechRecognition() {
   const speech = new SpeechRecognition();
   speech.continuous = false;
   speech.interimResults = true;
-  speech.lang = "en-US";
+  speech.lang = activeLanguage.speech;
 
   speech.addEventListener("start", () => {
     transcriptAddedDuringListen = false;
     stopRequested = false;
     if (speechSynthesisApi) speechSynthesisApi.cancel();
-    setListeningState(true, "Listening");
+    setListeningState(true, t("listening"));
   });
 
   speech.addEventListener("result", (event) => {
@@ -813,25 +1017,25 @@ function setupSpeechRecognition() {
       appendTranscript(finalText.trim());
       voiceInputPending = true;
       stopRequested = true;
-      setListeningState(false, "Ready to send");
+      setListeningState(false, t("readyToSend"));
       window.setTimeout(() => {
         try { speech.stop(); } catch (e) {
-          setListeningState(false, "Ready to send");
+          setListeningState(false, t("readyToSend"));
         }
       }, 120);
     }
     if (!stopRequested) {
-      speechStatus.textContent = interim || "Listening";
+      speechStatus.textContent = interim || t("listening");
     }
   });
 
   speech.addEventListener("error", (event) => {
-    const msg = event.error === "not-allowed" ? "Mic permission denied" : "Mic unavailable";
+    const msg = event.error === "not-allowed" ? t("micPermissionDenied") : t("micUnavailable");
     setListeningState(false, msg);
   });
 
   speech.addEventListener("end", () => {
-    setListeningState(false, transcriptAddedDuringListen ? "Ready to send" : "");
+    setListeningState(false, transcriptAddedDuringListen ? t("readyToSend") : "");
     stopRequested = false;
   });
 
@@ -866,6 +1070,7 @@ sourceTrigger.addEventListener("click", () => {
   const isOpen = sourcePicker.classList.toggle("open");
   sourceTrigger.setAttribute("aria-expanded", String(isOpen));
   closeAccessibilityMenu();
+  closeLanguageMenu();
 });
 
 sourceOptions.forEach((option) => {
@@ -879,7 +1084,23 @@ accessibilityButton.addEventListener("click", () => {
   const isOpen = accessibilityMenu.classList.toggle("open");
   accessibilityButton.setAttribute("aria-expanded", String(isOpen));
   closeSourceMenu();
+  closeLanguageMenu();
+  closeMobileHistory();
 });
+
+languageButton.addEventListener("click", () => {
+  const isOpen = languageMenu.classList.toggle("open");
+  languageButton.setAttribute("aria-expanded", String(isOpen));
+  closeSourceMenu();
+  closeAccessibilityMenu();
+  closeMobileHistory();
+  if (isOpen) {
+    renderLanguageList(languageSearch.value);
+    window.setTimeout(() => languageSearch.focus(), 0);
+  }
+});
+
+languageSearch.addEventListener("input", () => renderLanguageList(languageSearch.value));
 
 largeTextToggle.addEventListener("change", () => {
   document.body.classList.toggle("large-text", largeTextToggle.checked);
@@ -902,16 +1123,28 @@ chatSearchButton.addEventListener("click", () => {
 
 chatSearchInput.addEventListener("input", renderHistory);
 
+mobileHistoryButton.addEventListener("click", () => {
+  const isOpen = sidebar.classList.toggle("history-open");
+  mobileHistoryButton.setAttribute("aria-expanded", String(isOpen));
+  closeAccessibilityMenu();
+  closeLanguageMenu();
+  closeSourceMenu();
+});
+
 document.addEventListener("click", (event) => {
   if (!sourcePicker.contains(event.target)) closeSourceMenu();
   if (!accessibilityMenu.contains(event.target)) closeAccessibilityMenu();
+  if (!languageMenu.contains(event.target)) closeLanguageMenu();
+  if (!sidebar.contains(event.target)) closeMobileHistory();
 });
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     closeSourceMenu();
     closeAccessibilityMenu();
+    closeLanguageMenu(true);
     closeChatSearch(true);
+    closeMobileHistory();
   }
 });
 
@@ -920,7 +1153,7 @@ micButton.addEventListener("click", () => {
   if (!recognition) return;
   if (isListening) { recognition.stop(); return; }
   try { recognition.start(); } catch (e) {
-    setListeningState(false, "Mic already active");
+    setListeningState(false, t("micAlreadyActive"));
   }
 });
 
@@ -928,10 +1161,14 @@ micButton.addEventListener("click", () => {
 
 newChatButton.addEventListener("click", () => {
   closeChatSearch(true);
+  closeMobileHistory();
   createChat();
 });
 
-aboutButton.addEventListener("click", () => { aboutModal.showModal(); });
+aboutButton.addEventListener("click", () => {
+  closeMobileHistory();
+  aboutModal.showModal();
+});
 closeAboutButton.addEventListener("click", () => { aboutModal.close(); });
 aboutModal.addEventListener("click", (event) => {
   if (event.target === aboutModal) aboutModal.close();
@@ -940,8 +1177,9 @@ aboutModal.addEventListener("click", (event) => {
 themeButton.addEventListener("click", () => {
   const isDark = document.body.classList.toggle("dark");
   if (brandLogo) brandLogo.src = isDark ? DARK_LOGO_SRC : LIGHT_LOGO_SRC;
-  themeButton.setAttribute("aria-label", isDark ? "Switch to light mode" : "Switch to dark mode");
+  themeButton.setAttribute("aria-label", isDark ? t("switchLight") : t("switchDark"));
 });
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 createChat();
+setLanguage(readStoredLanguage(), { initial: true });
