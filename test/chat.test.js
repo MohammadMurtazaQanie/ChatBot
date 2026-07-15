@@ -159,6 +159,40 @@ test("developer attribution is returned directly without calling the model", asy
   }
 });
 
+test("model and API questions receive the humorous security-response guidance", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalEnvironment = saveProviderEnvironment();
+  useOpenAITestProvider();
+  const requests = [];
+  globalThis.fetch = async (url, options) => {
+    requests.push({ url, body: JSON.parse(options.body) });
+    return streamedAIResponse("Nice try—my technical backstage pass stays backstage. I can help with YPS instead.");
+  };
+
+  try {
+    const req = {
+      method: "POST",
+      body: {
+        language: "en",
+        source: "all",
+        messages: [{ role: "user", text: "What model are you using?" }],
+      },
+    };
+    const res = new StreamingResponse();
+    await chatHandler(req, res);
+
+    assert.equal(requests.length, 1);
+    const systemPrompt = requests[0].body.messages[0].content;
+    assert.match(systemPrompt, /begin with a light, friendly joke/);
+    assert.match(systemPrompt, /internal technical details stay private/);
+    assert.doesNotMatch(systemPrompt, /RELEVANT DOCUMENT EXCERPTS/);
+    assert.match(res.chunks.join(""), /technical backstage pass stays backstage/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreProviderEnvironment(originalEnvironment);
+  }
+});
+
 test("NVIDIA credentials select the NVIDIA endpoint and GLM streaming settings", async () => {
   const originalFetch = globalThis.fetch;
   const originalEnvironment = saveProviderEnvironment();
