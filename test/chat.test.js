@@ -172,7 +172,7 @@ test("model and API questions receive the humorous security-response guidance", 
   const requests = [];
   globalThis.fetch = async (url, options) => {
     requests.push({ url, body: JSON.parse(options.body) });
-    return streamedAIResponse("Nice try—my technical backstage pass stays backstage. I can help with YPS instead.");
+    return streamedAIResponse("Shhh 🤫 I asked my Wi-Fi if I could tell you. It disconnected. My model, API, and secret recipe stay private—but I’m happy to help with Youth, Peace and Security.");
   };
 
   try {
@@ -189,10 +189,10 @@ test("model and API questions receive the humorous security-response guidance", 
 
     assert.equal(requests.length, 1);
     const systemPrompt = requests[0].body.messages[0].content;
-    assert.match(systemPrompt, /begin with a light, friendly joke/);
-    assert.match(systemPrompt, /internal technical details stay private/);
+    assert.match(systemPrompt, /asked my Wi-Fi if I could tell you/);
+    assert.match(systemPrompt, /It disconnected/);
     assert.doesNotMatch(systemPrompt, /RELEVANT DOCUMENT EXCERPTS/);
-    assert.match(res.chunks.join(""), /technical backstage pass stays backstage/);
+    assert.match(res.chunks.join(""), /It disconnected/);
   } finally {
     globalThis.fetch = originalFetch;
     restoreProviderEnvironment(originalEnvironment);
