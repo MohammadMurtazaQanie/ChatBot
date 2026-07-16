@@ -10,7 +10,7 @@
  *   OPENROUTER_API_KEY — OpenRouter API key
  *   NVIDIA_API_KEY     — NVIDIA API key
  *   DEEPSEEK_API_KEY   — DeepSeek key  (starts with sk-)
- *   OPENAI_API_KEY     — OR OpenAI key
+ *   OPENAI_API_KEY     — OpenAI key, or GitHub token with a GitHub Models base URL
  *   AI_MODEL           — optional model override
  *   API_BASE_URL       — optional base URL override
  *   OPENROUTER_SITE_URL — optional deployed site URL for OpenRouter attribution
@@ -35,6 +35,7 @@ const GITHUB_MAX_RESPONSE_TOKENS = 1200;
 const GITHUB_RETRY_HISTORY_MESSAGES = 3;
 const GITHUB_RETRY_HISTORY_CHARS = 3000;
 const GITHUB_RETRY_RESPONSE_TOKENS = 800;
+const GITHUB_DEFAULT_MODEL = "openai/gpt-4.1-mini";
 
 // ── Source → knowledge file mapping ──────────────────────────────────────────
 const SOURCE_TO_KEYS = {
@@ -143,6 +144,10 @@ function isDeveloperQuestion(text) {
 function sanitize(text) {
   if (typeof text !== "string") return "";
   return text.slice(0, 4000).trim();
+}
+
+function isReasoningModel(model) {
+  return /^openai\/(?:gpt-5(?:$|-)|o(?:1|3|4)(?:$|-))/i.test(model);
 }
 
 function buildModelMessages(messages, maxMessages, maxChars = Infinity) {
@@ -350,7 +355,15 @@ function sendStreamedText(res, text) {
   return res.end();
 }
 
-async function translateQueryToEnglish({ query, language, apiBase, apiKey, model, providerHeaders }) {
+async function translateQueryToEnglish({
+  query,
+  language,
+  apiBase,
+  apiKey,
+  model,
+  providerHeaders,
+  omitSamplingParameters = false,
+}) {
   if (language.code === "en" || !query) return query;
 
   try {
@@ -370,8 +383,9 @@ async function translateQueryToEnglish({ query, language, apiBase, apiKey, model
           },
           { role: "user", content: query },
         ],
-        max_tokens: 180,
-        temperature: 0,
+        ...(omitSamplingParameters
+          ? {}
+          : { max_tokens: 180, temperature: 0 }),
         stream: false,
       }),
     });
@@ -443,9 +457,13 @@ export default async function handler(req, res) {
 
   const isOpenRouter = provider === "openrouter";
   const isNvidia = provider === "nvidia";
-  const apiBase = process.env.API_BASE_URL || providerDefaults[provider].apiBase;
-  const model = process.env.AI_MODEL || providerDefaults[provider].model;
+  const apiBase = (process.env.API_BASE_URL || providerDefaults[provider].apiBase)
+    .trim()
+    .replace(/\/+$/, "");
   const isGitHubModels = /^https:\/\/models\.github\.ai(?:\/|$)/i.test(apiBase);
+  const model = process.env.AI_MODEL?.trim() ||
+    (isGitHubModels ? GITHUB_DEFAULT_MODEL : providerDefaults[provider].model);
+  const usesGitHubReasoningModel = isGitHubModels && isReasoningModel(model);
   const providerHeaders = isOpenRouter
     ? {
         ...(process.env.OPENROUTER_SITE_URL
@@ -491,6 +509,7 @@ export default async function handler(req, res) {
         apiKey,
         model,
         providerHeaders,
+        omitSamplingParameters: usesGitHubReasoningModel,
       });
   const contextMatches = blockedRequest
     ? []
@@ -692,16 +711,31 @@ FORMAT
   );
 
   function createCompletionBody(prompt, conversationMessages, maxTokens) {
-    return {
+    const body = {
       model,
       messages: [
         { role: "system", content: prompt },
         ...conversationMessages,
       ],
-      max_tokens: maxTokens,
-      temperature: isNvidia ? 1 : 0.3,
-      ...(isNvidia ? { top_p: 1, seed: 42 } : {}),
       stream: true,
+    };
+
+    if (isNvidia) {
+      return {
+        ...body,
+        max_tokens: maxTokens,
+        temperature: 1,
+        top_p: 1,
+        seed: 42,
+      };
+    }
+
+    if (usesGitHubReasoningModel) return body;
+
+    return {
+      ...body,
+      max_tokens: maxTokens,
+      temperature: 0.3,
     };
   }
   // ── Call AI ───────────────────────────────────────────────────────────────
@@ -751,7 +785,9 @@ FORMAT
     const errText = await aiResponse.text();
     console.error(`AI API ${aiResponse.status}:`, errText);
     return res.status(aiResponse.status).json({
-      error: `AI API returned an error (${aiResponse.status}). Please try again.`,
+      error: isGitHubModels && aiResponse.status === 400
+        ? "GitHub Models rejected the request configuration (400). Confirm that AI_MODEL is an exact GitHub Models catalog ID, then redeploy."
+        : `AI API returned an error (${aiResponse.status}). Please try again.`,
     });
   }
 

@@ -37,7 +37,7 @@ To use GitHub Models, add these values in Vercel and replace the model value wit
 ```text
 OPENAI_API_KEY=your-github-token
 API_BASE_URL=https://models.github.ai/inference
-AI_MODEL=openai/gpt-4o
+AI_MODEL=openai/gpt-5
 ```
 
-Remove any `OPENROUTER_API_KEY`, `NVIDIA_API_KEY`, or `DEEPSEEK_API_KEY` value unless that provider should take priority. The endpoint automatically applies a smaller conversation and document budget for GitHub Models. If GitHub still returns HTTP 413, it retries once with a compact request. Keep the GitHub token only in Vercel environment variables.
+Remove any `OPENROUTER_API_KEY`, `NVIDIA_API_KEY`, or `DEEPSEEK_API_KEY` value unless that provider should take priority. The endpoint automatically removes unsupported `temperature` and legacy `max_tokens` fields for GitHub reasoning models such as `openai/gpt-5`. It also applies a smaller conversation and document budget for GitHub Models; if GitHub returns HTTP 413, it retries once with a compact request. Keep the GitHub token only in Vercel environment variables.

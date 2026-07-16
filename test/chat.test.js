@@ -282,6 +282,66 @@ test("OpenRouter credentials select the Nemotron free model and attribution head
   }
 });
 
+test("GitHub GPT-5 omits unsupported sampling and legacy token parameters", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalEnvironment = saveProviderEnvironment();
+  delete process.env.OPENROUTER_API_KEY;
+  delete process.env.OPENROUTER_SITE_URL;
+  delete process.env.OPENROUTER_APP_NAME;
+  delete process.env.NVIDIA_API_KEY;
+  delete process.env.DEEPSEEK_API_KEY;
+  process.env.OPENAI_API_KEY = "test-github-token";
+  process.env.API_BASE_URL = "https://models.github.ai/inference";
+  process.env.AI_MODEL = "openai/gpt-5";
+
+  const requests = [];
+  globalThis.fetch = async (url, options) => {
+    const body = JSON.parse(options.body);
+    requests.push({ url, headers: options.headers, body });
+
+    if (body.stream === false) {
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: "Explain youth participation in peacebuilding." } }],
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    return streamedAIResponse("Réponse GPT-5");
+  };
+
+  try {
+    const req = {
+      method: "POST",
+      body: {
+        language: "fr",
+        source: "all",
+        messages: [{
+          role: "user",
+          text: "Expliquez la participation des jeunes à la consolidation de la paix.",
+        }],
+      },
+    };
+    const res = new StreamingResponse();
+    await chatHandler(req, res);
+
+    assert.equal(requests.length, 2);
+    for (const request of requests) {
+      assert.equal(request.url, "https://models.github.ai/inference/chat/completions");
+      assert.equal(request.body.model, "openai/gpt-5");
+      assert.equal("temperature" in request.body, false);
+      assert.equal("max_tokens" in request.body, false);
+    }
+    assert.equal(requests[0].body.stream, false);
+    assert.equal(requests[1].body.stream, true);
+    assert.match(res.chunks.join(""), /Réponse GPT-5/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreProviderEnvironment(originalEnvironment);
+  }
+});
+
 test("GitHub Models retries a rejected request with a compact payload", async () => {
   const originalFetch = globalThis.fetch;
   const originalWarn = console.warn;
