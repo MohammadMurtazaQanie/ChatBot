@@ -146,6 +146,47 @@ function sanitize(text) {
   return text.slice(0, 4000).trim();
 }
 
+function cleanEnvironmentValue(value) {
+  if (typeof value !== "string") return "";
+  const trimmed = value.trim();
+  const quote = trimmed[0];
+  if ((quote === '"' || quote === "'") && trimmed.at(-1) === quote) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+}
+
+function normalizeGitHubModelId(value) {
+  const model = cleanEnvironmentValue(value);
+  if (!model) return "";
+
+  const marketplaceMatch = model.match(
+    /^https?:\/\/github\.com\/marketplace\/models\/azure-openai\/([^/?#]+)\/?(?:[?#].*)?$/i
+  );
+  if (marketplaceMatch) return `openai/${marketplaceMatch[1]}`;
+  if (/^azure-openai\//i.test(model)) {
+    return model.replace(/^azure-openai\//i, "openai/");
+  }
+  if (/^(?:gpt-|o(?:1|3|4)(?:$|-))/i.test(model)) return `openai/${model}`;
+  return model;
+}
+
+function extractProviderError(rawError) {
+  if (typeof rawError !== "string" || !rawError.trim()) return "";
+
+  try {
+    const payload = JSON.parse(rawError);
+    const detail = payload?.error?.message || payload?.message || payload?.detail;
+    if (typeof detail === "string") {
+      return detail.replace(/\s+/g, " ").trim().slice(0, 400);
+    }
+  } catch {
+    // Some compatible providers return plain text instead of JSON.
+  }
+
+  return rawError.replace(/\s+/g, " ").trim().slice(0, 400);
+}
+
 function isReasoningModel(model) {
   return /^openai\/(?:gpt-5(?:$|-)|o(?:1|3|4)(?:$|-))/i.test(model);
 }
@@ -457,11 +498,15 @@ export default async function handler(req, res) {
 
   const isOpenRouter = provider === "openrouter";
   const isNvidia = provider === "nvidia";
-  const apiBase = (process.env.API_BASE_URL || providerDefaults[provider].apiBase)
-    .trim()
+  const apiBase = cleanEnvironmentValue(
+    process.env.API_BASE_URL || providerDefaults[provider].apiBase
+  )
     .replace(/\/+$/, "");
   const isGitHubModels = /^https:\/\/models\.github\.ai(?:\/|$)/i.test(apiBase);
-  const model = process.env.AI_MODEL?.trim() ||
+  const configuredModel = isGitHubModels
+    ? normalizeGitHubModelId(process.env.AI_MODEL)
+    : cleanEnvironmentValue(process.env.AI_MODEL);
+  const model = configuredModel ||
     (isGitHubModels ? GITHUB_DEFAULT_MODEL : providerDefaults[provider].model);
   const usesGitHubReasoningModel = isGitHubModels && isReasoningModel(model);
   const providerHeaders = isOpenRouter
@@ -784,9 +829,10 @@ FORMAT
     res.off("close", abortUpstream);
     const errText = await aiResponse.text();
     console.error(`AI API ${aiResponse.status}:`, errText);
+    const providerDetail = extractProviderError(errText);
     return res.status(aiResponse.status).json({
       error: isGitHubModels && aiResponse.status === 400
-        ? "GitHub Models rejected the request configuration (400). Confirm that AI_MODEL is an exact GitHub Models catalog ID, then redeploy."
+        ? `GitHub Models rejected the request (400).${providerDetail ? ` ${providerDetail}` : ""}`
         : `AI API returned an error (${aiResponse.status}). Please try again.`,
     });
   }

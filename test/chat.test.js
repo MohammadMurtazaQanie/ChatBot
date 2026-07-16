@@ -292,7 +292,7 @@ test("GitHub GPT-5 omits unsupported sampling and legacy token parameters", asyn
   delete process.env.DEEPSEEK_API_KEY;
   process.env.OPENAI_API_KEY = "test-github-token";
   process.env.API_BASE_URL = "https://models.github.ai/inference";
-  process.env.AI_MODEL = "openai/gpt-5";
+  process.env.AI_MODEL = '"https://github.com/marketplace/models/azure-openai/gpt-5"';
 
   const requests = [];
   globalThis.fetch = async (url, options) => {
@@ -338,6 +338,51 @@ test("GitHub GPT-5 omits unsupported sampling and legacy token parameters", asyn
     assert.match(res.chunks.join(""), /Réponse GPT-5/);
   } finally {
     globalThis.fetch = originalFetch;
+    restoreProviderEnvironment(originalEnvironment);
+  }
+});
+
+test("GitHub Models returns the provider's useful 400 detail", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalError = console.error;
+  const originalEnvironment = saveProviderEnvironment();
+  delete process.env.OPENROUTER_API_KEY;
+  delete process.env.OPENROUTER_SITE_URL;
+  delete process.env.OPENROUTER_APP_NAME;
+  delete process.env.NVIDIA_API_KEY;
+  delete process.env.DEEPSEEK_API_KEY;
+  process.env.OPENAI_API_KEY = "test-github-token";
+  process.env.API_BASE_URL = "https://models.github.ai/inference";
+  process.env.AI_MODEL = "openai/gpt-5";
+
+  console.error = () => {};
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    error: {
+      message: "Unsupported request field for this model.",
+      code: "invalid_request_error",
+    },
+  }), {
+    status: 400,
+    headers: { "Content-Type": "application/json" },
+  });
+
+  try {
+    const req = {
+      method: "POST",
+      body: {
+        language: "en",
+        source: "all",
+        messages: [{ role: "user", text: "Explain youth participation." }],
+      },
+    };
+    const res = new StreamingResponse();
+    await chatHandler(req, res);
+
+    assert.equal(res.statusCode, 400);
+    assert.match(res.jsonBody.error, /Unsupported request field for this model/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.error = originalError;
     restoreProviderEnvironment(originalEnvironment);
   }
 });
