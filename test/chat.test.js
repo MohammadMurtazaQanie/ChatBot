@@ -281,3 +281,82 @@ test("OpenRouter credentials select the Nemotron free model and attribution head
     restoreProviderEnvironment(originalEnvironment);
   }
 });
+
+test("GitHub Models retries a rejected request with a compact payload", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWarn = console.warn;
+  const originalEnvironment = saveProviderEnvironment();
+  delete process.env.OPENROUTER_API_KEY;
+  delete process.env.OPENROUTER_SITE_URL;
+  delete process.env.OPENROUTER_APP_NAME;
+  delete process.env.NVIDIA_API_KEY;
+  delete process.env.DEEPSEEK_API_KEY;
+  process.env.OPENAI_API_KEY = "test-github-token";
+  process.env.API_BASE_URL = "https://models.github.ai/inference";
+  process.env.AI_MODEL = "openai/gpt-4o";
+
+  const requests = [];
+  console.warn = () => {};
+  globalThis.fetch = async (url, options) => {
+    requests.push({
+      url,
+      headers: options.headers,
+      body: JSON.parse(options.body),
+    });
+
+    if (requests.length === 1) {
+      return new Response(JSON.stringify({ message: "Payload is too large" }), {
+        status: 413,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    return streamedAIResponse("Compact response");
+  };
+
+  try {
+    const messages = [];
+    for (let index = 1; index <= 12; index += 1) {
+      messages.push({
+        role: "user",
+        text: `Question ${index} about youth participation ${"x".repeat(500)}`,
+      });
+      messages.push({
+        role: "assistant",
+        text: `Answer ${index} ${"y".repeat(500)}`,
+      });
+    }
+    messages.push({
+      role: "user",
+      text: "Explain youth participation in peacebuilding.",
+    });
+
+    const req = {
+      method: "POST",
+      body: { language: "en", source: "all", messages },
+    };
+    const res = new StreamingResponse();
+    await chatHandler(req, res);
+
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].url, "https://models.github.ai/inference/chat/completions");
+    assert.equal(requests[0].headers.Authorization, "Bearer test-github-token");
+    assert.equal(requests[0].headers.Accept, "application/vnd.github+json");
+    assert.equal(requests[0].headers["X-GitHub-Api-Version"], "2026-03-10");
+    assert.equal(requests[0].body.model, "openai/gpt-4o");
+    assert.equal(requests[0].body.max_tokens, 1200);
+    assert.ok(requests[0].body.messages.length <= 10);
+
+    assert.equal(requests[1].body.max_tokens, 800);
+    assert.ok(requests[1].body.messages.length <= 4);
+    assert.doesNotMatch(
+      requests[1].body.messages[0].content,
+      /RELEVANT DOCUMENT EXCERPTS/
+    );
+    assert.match(res.chunks.join(""), /Compact response/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
+    restoreProviderEnvironment(originalEnvironment);
+  }
+});

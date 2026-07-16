@@ -27,6 +27,14 @@ const MAX_HISTORY_MESSAGES = 21;
 const MAX_CONTEXT_CHUNKS = 6;
 const MAX_CONTEXT_CHARS = 3500;
 const MAX_RESPONSE_TOKENS = 2400;
+const GITHUB_MAX_HISTORY_MESSAGES = 9;
+const GITHUB_MAX_HISTORY_CHARS = 8000;
+const GITHUB_MAX_CONTEXT_CHUNKS = 3;
+const GITHUB_MAX_CONTEXT_CHARS = 1400;
+const GITHUB_MAX_RESPONSE_TOKENS = 1200;
+const GITHUB_RETRY_HISTORY_MESSAGES = 3;
+const GITHUB_RETRY_HISTORY_CHARS = 3000;
+const GITHUB_RETRY_RESPONSE_TOKENS = 800;
 
 // ── Source → knowledge file mapping ──────────────────────────────────────────
 const SOURCE_TO_KEYS = {
@@ -135,6 +143,26 @@ function isDeveloperQuestion(text) {
 function sanitize(text) {
   if (typeof text !== "string") return "";
   return text.slice(0, 4000).trim();
+}
+
+function buildModelMessages(messages, maxMessages, maxChars = Infinity) {
+  const selected = [];
+  let remainingChars = maxChars;
+
+  for (const message of messages.slice(-maxMessages).reverse()) {
+    if (remainingChars <= 0) break;
+
+    const content = sanitize(message.text).slice(0, remainingChars);
+    if (!content) continue;
+
+    selected.unshift({
+      role: message.role === "assistant" ? "assistant" : "user",
+      content,
+    });
+    remainingChars -= content.length;
+  }
+
+  return selected;
 }
 
 function isLikelyFollowUp(text) {
@@ -417,6 +445,7 @@ export default async function handler(req, res) {
   const isNvidia = provider === "nvidia";
   const apiBase = process.env.API_BASE_URL || providerDefaults[provider].apiBase;
   const model = process.env.AI_MODEL || providerDefaults[provider].model;
+  const isGitHubModels = /^https:\/\/models\.github\.ai(?:\/|$)/i.test(apiBase);
   const providerHeaders = isOpenRouter
     ? {
         ...(process.env.OPENROUTER_SITE_URL
@@ -424,7 +453,12 @@ export default async function handler(req, res) {
           : {}),
         "X-OpenRouter-Title": process.env.OPENROUTER_APP_NAME || "YPS AI",
       }
-    : {};
+    : isGitHubModels
+      ? {
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2026-03-10",
+        }
+      : {};
 
   // ── Parse body ────────────────────────────────────────────────────────────
   const { messages = [], source = "all", language = "en" } = req.body || {};
@@ -461,7 +495,12 @@ export default async function handler(req, res) {
   const contextMatches = blockedRequest
     ? []
     : retrieveContextMatches(safeSource, retrievalQuery);
-  const context = contextMatches.map((item) => item.chunk);
+  const context = contextMatches
+    .slice(0, isGitHubModels ? GITHUB_MAX_CONTEXT_CHUNKS : MAX_CONTEXT_CHUNKS)
+    .map((item) => item.chunk);
+  const contextCharLimit = isGitHubModels
+    ? GITHUB_MAX_CONTEXT_CHARS
+    : MAX_CONTEXT_CHARS;
 
   if (!blockedRequest && safeSource !== "all") {
     const explicitSources = getExplicitRelevantSources(retrievalQuery);
@@ -521,7 +560,7 @@ export default async function handler(req, res) {
   const contextBlock = context.length > 0
     ? "\n\nRELEVANT DOCUMENT EXCERPTS (use these as your primary evidence):\n\n" +
       context.map((c, i) =>
-        `[${i + 1}] "${sanitize(c.source_name)}" — ${sanitize(c.category)}:\n${sanitize(c.text).slice(0, MAX_CONTEXT_CHARS)}`
+        `[${i + 1}] "${sanitize(c.source_name)}" — ${sanitize(c.category)}:\n${sanitize(c.text).slice(0, contextCharLimit)}`
       ).join("\n\n---\n\n")
     : "";
 
@@ -629,6 +668,42 @@ FORMAT
 - Keep most responses between 50 and 200 words, but adapt naturally: simple questions may require shorter answers, while complex analytical questions may require more detail.
 - Avoid unnecessary repetition, disclaimers, and introductory filler.
 - Complete every response. Before stopping, ensure the final sentence, bullet point, citation marker, and Sources line are not cut off.`;
+
+  const modelMessages = buildModelMessages(
+    trimmedMessages,
+    isGitHubModels ? GITHUB_MAX_HISTORY_MESSAGES : MAX_HISTORY_MESSAGES,
+    isGitHubModels ? GITHUB_MAX_HISTORY_CHARS : Infinity
+  );
+  const responseTokenLimit = isNvidia
+    ? 16384
+    : isGitHubModels
+      ? GITHUB_MAX_RESPONSE_TOKENS
+      : MAX_RESPONSE_TOKENS;
+  const compactContextGuidance = isAllSources
+    ? `- Document excerpts were omitted from this compact retry to fit the provider's request limit. Give a careful answer from established, stable general knowledge and do not invent or add citations.`
+    : `- Document excerpts were omitted from this compact retry to fit the provider's request limit. Do not answer from another category or general knowledge; explain that the selected source cannot support a compact answer and ask the user to select All sources.`;
+  const compactSystemPrompt = systemPrompt
+    .replace(contextBlock, "")
+    .replace(contextGuidance, compactContextGuidance);
+  const compactModelMessages = buildModelMessages(
+    trimmedMessages,
+    GITHUB_RETRY_HISTORY_MESSAGES,
+    GITHUB_RETRY_HISTORY_CHARS
+  );
+
+  function createCompletionBody(prompt, conversationMessages, maxTokens) {
+    return {
+      model,
+      messages: [
+        { role: "system", content: prompt },
+        ...conversationMessages,
+      ],
+      max_tokens: maxTokens,
+      temperature: isNvidia ? 1 : 0.3,
+      ...(isNvidia ? { top_p: 1, seed: 42 } : {}),
+      stream: true,
+    };
+  }
   // ── Call AI ───────────────────────────────────────────────────────────────
   let aiResponse;
   const upstreamController = new AbortController();
@@ -637,30 +712,33 @@ FORMAT
   };
   res.once("close", abortUpstream);
 
+  const requestCompletion = (body) => fetch(`${apiBase}/chat/completions`, {
+    method: "POST",
+    signal: upstreamController.signal,
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+      ...providerHeaders,
+    },
+    body: JSON.stringify(body),
+  });
+
   try {
-    aiResponse = await fetch(`${apiBase}/chat/completions`, {
-      method: "POST",
-      signal: upstreamController.signal,
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-        ...providerHeaders,
-      },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: "system", content: systemPrompt },
-          ...trimmedMessages.map((m) => ({
-            role: m.role === "assistant" ? "assistant" : "user",
-            content: sanitize(m.text),
-          })),
-        ],
-        max_tokens: isNvidia ? 16384 : MAX_RESPONSE_TOKENS,
-        temperature: isNvidia ? 1 : 0.3,
-        ...(isNvidia ? { top_p: 1, seed: 42 } : {}),
-        stream: true,
-      }),
-    });
+    aiResponse = await requestCompletion(
+      createCompletionBody(systemPrompt, modelMessages, responseTokenLimit)
+    );
+
+    if (isGitHubModels && aiResponse.status === 413) {
+      const firstError = await aiResponse.text().catch(() => "");
+      console.warn("GitHub Models rejected the initial payload; retrying compactly:", firstError);
+      aiResponse = await requestCompletion(
+        createCompletionBody(
+          compactSystemPrompt,
+          compactModelMessages,
+          GITHUB_RETRY_RESPONSE_TOKENS
+        )
+      );
+    }
   } catch (err) {
     res.off("close", abortUpstream);
     if (err.name === "AbortError") return;
