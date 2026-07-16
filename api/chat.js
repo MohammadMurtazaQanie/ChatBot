@@ -156,6 +156,25 @@ function cleanEnvironmentValue(value) {
   return trimmed;
 }
 
+function normalizeApiBase(value) {
+  const cleaned = cleanEnvironmentValue(value)
+    .replace(/[?#].*$/, "")
+    .replace(/\/+$/, "");
+
+  if (/^https?:\/\/github\.com\/marketplace\/models\//i.test(cleaned)) {
+    return "https://models.github.ai/inference";
+  }
+
+  if (/^https:\/\/models\.github\.ai(?:\/|$)/i.test(cleaned)) {
+    return cleaned
+      .replace(/\/chat\/completions$/i, "")
+      .replace(/\/v1$/i, "")
+      .replace(/\/+$/, "");
+  }
+
+  return cleaned;
+}
+
 function normalizeGitHubModelId(value) {
   const model = cleanEnvironmentValue(value);
   if (!model) return "";
@@ -498,10 +517,9 @@ export default async function handler(req, res) {
 
   const isOpenRouter = provider === "openrouter";
   const isNvidia = provider === "nvidia";
-  const apiBase = cleanEnvironmentValue(
+  const apiBase = normalizeApiBase(
     process.env.API_BASE_URL || providerDefaults[provider].apiBase
-  )
-    .replace(/\/+$/, "");
+  );
   const isGitHubModels = /^https:\/\/models\.github\.ai(?:\/|$)/i.test(apiBase);
   const configuredModel = isGitHubModels
     ? normalizeGitHubModelId(process.env.AI_MODEL)
@@ -831,8 +849,8 @@ FORMAT
     console.error(`AI API ${aiResponse.status}:`, errText);
     const providerDetail = extractProviderError(errText);
     return res.status(aiResponse.status).json({
-      error: isGitHubModels && aiResponse.status === 400
-        ? `GitHub Models rejected the request (400).${providerDetail ? ` ${providerDetail}` : ""}`
+      error: isGitHubModels
+        ? `GitHub Models returned an error (${aiResponse.status}).${providerDetail ? ` ${providerDetail}` : " Please try again."}`
         : `AI API returned an error (${aiResponse.status}). Please try again.`,
     });
   }

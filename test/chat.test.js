@@ -291,7 +291,7 @@ test("GitHub GPT-5 omits unsupported sampling and legacy token parameters", asyn
   delete process.env.NVIDIA_API_KEY;
   delete process.env.DEEPSEEK_API_KEY;
   process.env.OPENAI_API_KEY = "test-github-token";
-  process.env.API_BASE_URL = "https://models.github.ai/inference";
+  process.env.API_BASE_URL = '"https://models.github.ai/inference/chat/completions"';
   process.env.AI_MODEL = '"https://github.com/marketplace/models/azure-openai/gpt-5"';
 
   const requests = [];
@@ -342,7 +342,7 @@ test("GitHub GPT-5 omits unsupported sampling and legacy token parameters", asyn
   }
 });
 
-test("GitHub Models returns the provider's useful 400 detail", async () => {
+test("GitHub Models returns the provider's useful error detail", async () => {
   const originalFetch = globalThis.fetch;
   const originalError = console.error;
   const originalEnvironment = saveProviderEnvironment();
@@ -362,7 +362,7 @@ test("GitHub Models returns the provider's useful 400 detail", async () => {
       code: "invalid_request_error",
     },
   }), {
-    status: 400,
+    status: 404,
     headers: { "Content-Type": "application/json" },
   });
 
@@ -378,7 +378,7 @@ test("GitHub Models returns the provider's useful 400 detail", async () => {
     const res = new StreamingResponse();
     await chatHandler(req, res);
 
-    assert.equal(res.statusCode, 400);
+    assert.equal(res.statusCode, 404);
     assert.match(res.jsonBody.error, /Unsupported request field for this model/);
   } finally {
     globalThis.fetch = originalFetch;
