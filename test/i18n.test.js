@@ -152,12 +152,15 @@ test("the page loads a self-contained classic bundle", () => {
   assert.match(bundle, /chatForm\.addEventListener\("submit"/);
   assert.match(bundle, /document\.documentElement\.dir = "ltr"/);
   assert.match(bundle, /const STATIC_LOCALES = Object\.freeze/);
+  assert.match(bundle, /class="sources-list"/);
+  assert.match(bundle, /class="source-number"/);
   assert.match(bundle, /"ar":\{"navAria":"[^"]+","newChat":"دردشة جديدة"/);
   assert.doesNotMatch(bundle, /document\.documentElement\.dir = activeLanguage\.dir/);
 
   const styles = fs.readFileSync(new URL("../styles.css", import.meta.url), "utf8");
   assert.doesNotMatch(styles, /html\[dir=["']rtl["']\]/);
   assert.match(styles, /body\.rtl-text \.privacy-details/);
+  assert.match(styles, /\.assistant \.bubble ol\.sources-list/);
   assert.match(styles, /unicode-bidi:\s*plaintext/);
   assert.doesNotMatch(styles, /body\.rtl-text \.privacy-details\s*\{[^}]*display:\s*flex/s);
   assert.match(html, /class="copyright-line" dir="ltr"/);

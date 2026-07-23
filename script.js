@@ -3,6 +3,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { ENGLISH_UI, getLanguage, LANGUAGES } from "./i18n.js";
+import { normalizeSourcesList } from "./markdown.js";
 
 // ── Source labels ─────────────────────────────────────────────────────────────
 const SOURCE_TRANSLATION_KEYS = {
@@ -342,7 +343,7 @@ async function callChatAPI(source, history, onDelta, languageCode = activeLangua
 
 function renderMarkdown(text) {
   // Escape raw HTML first so we don't accidentally inject anything
-  let html = text
+  let html = normalizeSourcesList(text)
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
@@ -373,6 +374,7 @@ function renderMarkdown(text) {
   const out = [];
   let paragraphLines = [];
   let listType = null;
+  let inSourcesSection = false;
 
   function flushParagraph() {
     if (!paragraphLines.length) return;
@@ -389,11 +391,19 @@ function renderMarkdown(text) {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const headingMatch = line.match(/^\s*(#{1,6})\s+(.+)/);
+    const sourcesHeadingMatch = line.match(
+      /^\s*(?:<strong>)?Sources:(?:<\/strong>)?\s*$/i
+    );
     const ulMatch = line.match(/^\s*[-*•]\s+(.+)/);
-    const olMatch = line.match(/^\s*\d+\.\s+(.+)/);
+    const olMatch = line.match(/^\s*(\d+)\.\s+(.+)/);
     const match = ulMatch || olMatch;
 
-    if (headingMatch) {
+    if (sourcesHeadingMatch) {
+      flushParagraph();
+      closeList();
+      inSourcesSection = true;
+      out.push(`<p class="sources-heading">${line.trim()}</p>`);
+    } else if (headingMatch) {
       flushParagraph();
       closeList();
       const headingLevel = Math.min(4, headingMatch[1].length + 1);
@@ -403,10 +413,22 @@ function renderMarkdown(text) {
       const nextListType = ulMatch ? "ul" : "ol";
       if (listType !== nextListType) {
         closeList();
-        out.push(`<${nextListType}>`);
+        const listClass =
+          inSourcesSection && nextListType === "ol" ? ` class="sources-list"` : "";
+        out.push(`<${nextListType}${listClass}>`);
         listType = nextListType;
       }
-      out.push(`<li>${match[1]}</li>`);
+      const listContent = ulMatch ? ulMatch[1] : olMatch[2];
+      const listValue = olMatch ? ` value="${Number(olMatch[1])}"` : "";
+      if (inSourcesSection && olMatch) {
+        out.push(
+          `<li${listValue}><sup class="source-number" aria-hidden="true">${Number(
+            olMatch[1]
+          )}</sup><span class="source-reference-text">${listContent}</span></li>`
+        );
+      } else {
+        out.push(`<li${listValue}>${listContent}</li>`);
+      }
     } else if (line.trim() === "") {
       flushParagraph();
       closeList();

@@ -2012,6 +2012,39 @@ body.dark .about-logo-dark {
   letter-spacing: 0;
 }
 
+.assistant .bubble .sources-heading {
+  margin-bottom: 0.4em;
+  font-weight: 600;
+}
+
+.assistant .bubble ol.sources-list {
+  margin: 0;
+  padding: 0.65em 0 0;
+  border-top: 1px solid var(--line);
+  list-style: none;
+}
+
+.assistant .bubble ol.sources-list li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 0.22em;
+  margin-bottom: 0.35em;
+}
+
+.assistant .bubble .source-number {
+  position: relative;
+  top: -0.08em;
+  font-size: 0.68em;
+  line-height: 1;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.assistant .bubble .source-reference-text {
+  min-width: 0;
+}
+
 /* ── Right-to-left text without mirroring the interface layout ──────────── */
 [data-i18n][dir="rtl"],
 [data-i18n-placeholder][dir="rtl"],

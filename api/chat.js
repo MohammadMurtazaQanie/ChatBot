@@ -796,8 +796,10 @@ CITATIONS
 - Do not cite unsupported general knowledge.
 - For an informational answer, cite at least 5 distinct relevant publications when at least 5 provided excerpts genuinely support the answer. Use fewer only when fewer than 5 relevant publications are available.
 - Never cite more than 10 publications in one answer. Do not add irrelevant or weakly related citations merely to reach the minimum.
-- When at least one citation is used, end the response with a single line beginning with "**Sources:**".
-- In the Sources line, list every cited publication exactly once, using its provided publication title—not a local filename. List publications in the order they first appear in the answer.
+- When at least one citation is used, end the response with the heading "**Sources:**", followed by a numbered reference list.
+- Put every cited publication on its own line and prefix it with its inline citation number, for example: "1. [Publication title](Verified publication URL)".
+- List cited publications in ascending citation-number order. Never use bullets, nested lists, or unnumbered entries in the Sources section.
+- List every cited publication exactly once, using its provided publication title—not a local filename.
 - When a cited excerpt provides a Verified publication URL, format that source as a Markdown link exactly like: [Publication title](Verified publication URL).
 - Copy each provided publication title and Verified publication URL exactly. Never invent, shorten, repair, or replace a URL.
 - If an excerpt has no Verified publication URL, list its publication title as plain text. Never guess a link.

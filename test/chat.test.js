@@ -186,6 +186,8 @@ test("retrieved excerpts provide publication titles and verified citation links"
     assert.equal(new Set(providedTitles).size, providedTitles.length);
     assert.match(systemPrompt, /cite at least 5 distinct relevant publications/);
     assert.match(systemPrompt, /Never cite more than 10 publications/);
+    assert.match(systemPrompt, /followed by a numbered reference list/);
+    assert.match(systemPrompt, /Never use bullets, nested lists, or unnumbered entries/);
     assert.match(systemPrompt, /Do not type Markdown heading markers/);
   } finally {
     globalThis.fetch = originalFetch;
