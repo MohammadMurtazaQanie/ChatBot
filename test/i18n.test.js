@@ -59,7 +59,6 @@ test("every interface translation key resolves to an English source string", () 
 test("every supported language has a complete bundled interface translation", () => {
   const protectedNames = [
     "Yahya Qanie",
-    "Lena Slachmuijlder",
     "Saji Prelis",
     "Search for Common Ground",
     "Murtaza Qanie",

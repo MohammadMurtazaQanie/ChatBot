@@ -252,7 +252,10 @@ test("developer attribution is returned directly without calling the model", asy
     await chatHandler(req, res);
 
     assert.equal(fetchCount, 0);
-    assert.match(res.chunks.join(""), /Murtaza Qanie, Yahya Qanie, Lena Slachmuijlder, and Saji Prelis/);
+    assert.match(
+      res.chunks.join(""),
+      /YPS AI was initiated and led by Yahya Qanie, with strategic guidance and support from Saji Prelis at Search for Common Ground\. Its technical architecture and development were led by Murtaza Qanie\./,
+    );
   } finally {
     globalThis.fetch = originalFetch;
     restoreProviderEnvironment(originalEnvironment);
