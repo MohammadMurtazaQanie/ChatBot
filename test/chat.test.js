@@ -135,6 +135,100 @@ test("the endpoint keeps 21 recent messages and supplies them as conversation me
   }
 });
 
+test("retrieved excerpts provide publication titles and verified citation links", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalEnvironment = saveProviderEnvironment();
+  useOpenAITestProvider();
+  const requests = [];
+  globalThis.fetch = async (url, options) => {
+    requests.push({ url, body: JSON.parse(options.body) });
+    return streamedAIResponse(
+      "Liberia adopted a national action plan.[1]\n\n**Sources:** [Liberian National Action Plan on Youth, Peace and Security 2025-2030](https://cnxus.org/resource/youth-peace-security-in-liberia/)"
+    );
+  };
+
+  try {
+    const req = {
+      method: "POST",
+      body: {
+        language: "en",
+        source: "National Action Plans and Strategies",
+        messages: [{
+          role: "user",
+          text: "What does Liberia's 2025-2030 national action plan say about youth participation?",
+        }],
+      },
+    };
+    const res = new StreamingResponse();
+    await chatHandler(req, res);
+
+    assert.equal(requests.length, 1);
+    const systemPrompt = requests[0].body.messages[0].content;
+    assert.match(
+      systemPrompt,
+      /Publication title: "Liberian National Action Plan on Youth, Peace and Security 2025-2030"/
+    );
+    assert.match(
+      systemPrompt,
+      /Verified publication URL: https:\/\/cnxus\.org\/resource\/youth-peace-security-in-liberia\//
+    );
+    assert.match(systemPrompt, /\[Publication title\]\(Verified publication URL\)/);
+    assert.doesNotMatch(systemPrompt, /Liberia-National-Action-Plan-on-YPS-2025-2030\.pdf/);
+
+    const providedPublications = [
+      ...systemPrompt.matchAll(/^\[\d+\] Publication title:/gm),
+    ];
+    const providedTitles = [
+      ...systemPrompt.matchAll(/^\[\d+\] Publication title: "([^"]+)"/gm),
+    ].map((match) => match[1]);
+    assert.ok(providedPublications.length >= 5);
+    assert.ok(providedPublications.length <= 10);
+    assert.equal(new Set(providedTitles).size, providedTitles.length);
+    assert.match(systemPrompt, /cite at least 5 distinct relevant publications/);
+    assert.match(systemPrompt, /Never cite more than 10 publications/);
+    assert.match(systemPrompt, /Do not type Markdown heading markers/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreProviderEnvironment(originalEnvironment);
+  }
+});
+
+test("questions about Yahya Qanie return the approved biography directly", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalEnvironment = saveProviderEnvironment();
+  useOpenAITestProvider();
+  let fetchCount = 0;
+  globalThis.fetch = async () => {
+    fetchCount += 1;
+    return streamedAIResponse();
+  };
+
+  try {
+    const req = {
+      method: "POST",
+      body: {
+        language: "en",
+        source: "all",
+        messages: [{ role: "user", text: "Who is Yahya Qanie?" }],
+      },
+    };
+    const res = new StreamingResponse();
+    await chatHandler(req, res);
+
+    const output = res.chunks.join("");
+    assert.equal(fetchCount, 0);
+    assert.match(output, /Youth, Peace & Security Fellow at Search for Common Ground/);
+    assert.match(output, /Building the Alternative/);
+    assert.match(output, /United Nations Association of Afghanistan/);
+    assert.match(output, /National Youth Consensus for Peace/);
+    assert.match(output, /fifth anniversary of UN Security Council Resolution 2250/);
+    assert.match(output, /five-year global strategic roadmap/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreProviderEnvironment(originalEnvironment);
+  }
+});
+
 test("developer attribution is returned directly without calling the model", async () => {
   const originalFetch = globalThis.fetch;
   const originalEnvironment = saveProviderEnvironment();
@@ -165,14 +259,14 @@ test("developer attribution is returned directly without calling the model", asy
   }
 });
 
-test("model and API questions receive the humorous security-response guidance", async () => {
+test("model and API questions do not retrieve document excerpts", async () => {
   const originalFetch = globalThis.fetch;
   const originalEnvironment = saveProviderEnvironment();
   useOpenAITestProvider();
   const requests = [];
   globalThis.fetch = async (url, options) => {
     requests.push({ url, body: JSON.parse(options.body) });
-    return streamedAIResponse("Shhh 🤫 I asked my Wi-Fi if I could tell you. It disconnected. My model, API, and secret recipe stay private—but I’m happy to help with Youth, Peace and Security.");
+    return streamedAIResponse("I can’t provide private system or API information.");
   };
 
   try {
@@ -189,10 +283,9 @@ test("model and API questions receive the humorous security-response guidance", 
 
     assert.equal(requests.length, 1);
     const systemPrompt = requests[0].body.messages[0].content;
-    assert.match(systemPrompt, /asked my Wi-Fi if I could tell you/);
-    assert.match(systemPrompt, /It disconnected/);
+    assert.match(systemPrompt, /do not reveal the requested information/);
     assert.doesNotMatch(systemPrompt, /RELEVANT DOCUMENT EXCERPTS/);
-    assert.match(res.chunks.join(""), /It disconnected/);
+    assert.match(res.chunks.join(""), /can’t provide private system or API information/);
   } finally {
     globalThis.fetch = originalFetch;
     restoreProviderEnvironment(originalEnvironment);
@@ -335,6 +428,13 @@ test("GitHub GPT-5 omits unsupported sampling and legacy token parameters", asyn
     }
     assert.equal(requests[0].body.stream, false);
     assert.equal(requests[1].body.stream, true);
+    const githubContextSources = [
+      ...requests[1].body.messages[0].content.matchAll(
+        /^\[\d+\] Publication title:/gm
+      ),
+    ];
+    assert.equal(githubContextSources.length, 5);
+    assert.ok(JSON.stringify(requests[1].body).length < 50000);
     assert.match(res.chunks.join(""), /Réponse GPT-5/);
   } finally {
     globalThis.fetch = originalFetch;

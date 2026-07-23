@@ -1979,6 +1979,30 @@ body.dark .about-logo-dark {
   font-style: italic;
 }
 
+.assistant .bubble h2,
+.assistant .bubble h3,
+.assistant .bubble h4 {
+  margin: 1em 0 0.45em;
+  font-size: 1.05em;
+  line-height: 1.4;
+  font-weight: 600;
+}
+
+.assistant .bubble h2 {
+  font-size: 1.12em;
+}
+
+.assistant .bubble a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.assistant .bubble a:hover {
+  text-decoration-thickness: 2px;
+}
+
 /* Inline citation superscripts [1] [2] */
 .assistant .bubble sup.cite {
   font-size: 0.72em;

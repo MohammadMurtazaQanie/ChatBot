@@ -504,6 +504,16 @@ function renderMarkdown(text) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
 
+  // Preserve safe Markdown links while applying the remaining inline formatting.
+  const links = [];
+  html = html.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s]+)\)/g, (_match, label, url) => {
+    const token = `@@YPSLINK${links.length}@@`;
+    links.push(
+      `<a href="${url}" target="_blank" rel="noopener noreferrer">${label}</a>`
+    );
+    return token;
+  });
+
   // Bold **text**
   html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
   // Italic *text* or _text_
@@ -512,6 +522,7 @@ function renderMarkdown(text) {
 
   // Inline citation markers [1], [2] → superscript
   html = html.replace(/\[(\d+)\]/g, "<sup class='cite'>[$1]</sup>");
+  html = html.replace(/@@YPSLINK(\d+)@@/g, (_match, index) => links[Number(index)] || "");
 
   // Render block elements semantically so CSS controls spacing consistently.
   const lines = html.replace(/\r\n?/g, "\n").split("\n");
@@ -533,11 +544,17 @@ function renderMarkdown(text) {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    const headingMatch = line.match(/^\s*(#{1,6})\s+(.+)/);
     const ulMatch = line.match(/^\s*[-*•]\s+(.+)/);
     const olMatch = line.match(/^\s*\d+\.\s+(.+)/);
     const match = ulMatch || olMatch;
 
-    if (match) {
+    if (headingMatch) {
+      flushParagraph();
+      closeList();
+      const headingLevel = Math.min(4, headingMatch[1].length + 1);
+      out.push(`<h${headingLevel}>${headingMatch[2]}</h${headingLevel}>`);
+    } else if (match) {
       flushParagraph();
       const nextListType = ulMatch ? "ul" : "ol";
       if (listType !== nextListType) {
