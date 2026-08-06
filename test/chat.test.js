@@ -24,13 +24,7 @@ class StreamingResponse extends EventEmitter {
 
 function saveProviderEnvironment() {
   return {
-    OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
-    OPENROUTER_SITE_URL: process.env.OPENROUTER_SITE_URL,
-    OPENROUTER_APP_NAME: process.env.OPENROUTER_APP_NAME,
-    NVIDIA_API_KEY: process.env.NVIDIA_API_KEY,
-    DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY,
-    OPENAI_API_KEY: process.env.OPENAI_API_KEY,
-    API_BASE_URL: process.env.API_BASE_URL,
+    GEMINI_API_KEY: process.env.GEMINI_API_KEY,
     AI_MODEL: process.env.AI_MODEL,
   };
 }
@@ -42,20 +36,34 @@ function restoreProviderEnvironment(original) {
   }
 }
 
-function useOpenAITestProvider() {
-  delete process.env.OPENROUTER_API_KEY;
-  delete process.env.OPENROUTER_SITE_URL;
-  delete process.env.OPENROUTER_APP_NAME;
-  delete process.env.NVIDIA_API_KEY;
-  delete process.env.DEEPSEEK_API_KEY;
-  delete process.env.API_BASE_URL;
+function useGeminiTestProvider() {
   delete process.env.AI_MODEL;
-  process.env.OPENAI_API_KEY = "test-key";
+  process.env.GEMINI_API_KEY = "test-gemini-key";
+}
+
+// The SDK calls fetch with a Request object rather than (url, options).
+async function readRequest(input, options = {}) {
+  const request = input instanceof Request ? input : new Request(String(input), options);
+  return {
+    url: request.url,
+    headers: Object.fromEntries(request.headers.entries()),
+    body: await request.clone().json(),
+  };
 }
 
 function streamedAIResponse(text = "Test response") {
   const stream = [
-    `data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}`,
+    `data: ${JSON.stringify({
+      event_type: "step.delta",
+      index: 0,
+      delta: { type: "thought_summary", text: "internal reasoning" },
+    })}`,
+    "",
+    `data: ${JSON.stringify({
+      event_type: "step.delta",
+      index: 0,
+      delta: { type: "text", text },
+    })}`,
     "",
     "data: [DONE]",
     "",
@@ -66,10 +74,25 @@ function streamedAIResponse(text = "Test response") {
   });
 }
 
+function interactionResponse(text) {
+  return new Response(JSON.stringify({
+    id: "test-interaction",
+    status: "completed",
+    steps: [{ type: "model_output", content: [{ type: "text", text }] }],
+  }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+function userInputTexts(input) {
+  return input.map((step) => step.content.map((part) => part.text).join(""));
+}
+
 test("a mismatched selected source is blocked before the model is called", async () => {
   const originalFetch = globalThis.fetch;
   const originalEnvironment = saveProviderEnvironment();
-  useOpenAITestProvider();
+  useGeminiTestProvider();
   let fetchCount = 0;
   globalThis.fetch = async () => {
     fetchCount += 1;
@@ -102,10 +125,10 @@ test("a mismatched selected source is blocked before the model is called", async
 test("the endpoint keeps 21 recent messages and supplies them as conversation memory", async () => {
   const originalFetch = globalThis.fetch;
   const originalEnvironment = saveProviderEnvironment();
-  useOpenAITestProvider();
+  useGeminiTestProvider();
   const requests = [];
-  globalThis.fetch = async (url, options) => {
-    requests.push({ url, body: JSON.parse(options.body) });
+  globalThis.fetch = async (input, options) => {
+    requests.push(await readRequest(input, options));
     return streamedAIResponse();
   };
 
@@ -125,10 +148,14 @@ test("the endpoint keeps 21 recent messages and supplies them as conversation me
     await chatHandler(req, res);
 
     assert.equal(requests.length, 1);
-    assert.equal(requests[0].body.messages.length, 22);
-    assert.equal(requests[0].body.messages[1].content, "Question 3 about youth participation");
-    assert.equal(requests[0].body.messages.at(-1).content, "Tell me more about its stages");
-    assert.match(requests[0].body.messages[0].content, /CONVERSATION MEMORY/);
+    const { input, system_instruction: systemPrompt } = requests[0].body;
+    assert.equal(input.length, 21);
+    assert.equal(input[0].content[0].text, "Question 3 about youth participation");
+    assert.equal(input[0].type, "user_input");
+    assert.equal(input[1].type, "model_output");
+    assert.equal(input.at(-1).content[0].text, "Tell me more about its stages");
+    assert.equal(input.at(-1).type, "user_input");
+    assert.match(systemPrompt, /CONVERSATION MEMORY/);
   } finally {
     globalThis.fetch = originalFetch;
     restoreProviderEnvironment(originalEnvironment);
@@ -138,10 +165,10 @@ test("the endpoint keeps 21 recent messages and supplies them as conversation me
 test("retrieved excerpts provide publication titles and verified citation links", async () => {
   const originalFetch = globalThis.fetch;
   const originalEnvironment = saveProviderEnvironment();
-  useOpenAITestProvider();
+  useGeminiTestProvider();
   const requests = [];
-  globalThis.fetch = async (url, options) => {
-    requests.push({ url, body: JSON.parse(options.body) });
+  globalThis.fetch = async (input, options) => {
+    requests.push(await readRequest(input, options));
     return streamedAIResponse(
       "Liberia adopted a national action plan.[1]\n\n**Sources:** [Liberian National Action Plan on Youth, Peace and Security 2025-2030](https://cnxus.org/resource/youth-peace-security-in-liberia/)"
     );
@@ -163,7 +190,7 @@ test("retrieved excerpts provide publication titles and verified citation links"
     await chatHandler(req, res);
 
     assert.equal(requests.length, 1);
-    const systemPrompt = requests[0].body.messages[0].content;
+    const systemPrompt = requests[0].body.system_instruction;
     assert.match(
       systemPrompt,
       /Publication title: "Liberian National Action Plan on Youth, Peace and Security 2025-2030"/
@@ -198,7 +225,7 @@ test("retrieved excerpts provide publication titles and verified citation links"
 test("questions about Yahya Qanie return the approved biography directly", async () => {
   const originalFetch = globalThis.fetch;
   const originalEnvironment = saveProviderEnvironment();
-  useOpenAITestProvider();
+  useGeminiTestProvider();
   let fetchCount = 0;
   globalThis.fetch = async () => {
     fetchCount += 1;
@@ -234,7 +261,7 @@ test("questions about Yahya Qanie return the approved biography directly", async
 test("developer attribution is returned directly without calling the model", async () => {
   const originalFetch = globalThis.fetch;
   const originalEnvironment = saveProviderEnvironment();
-  useOpenAITestProvider();
+  useGeminiTestProvider();
   let fetchCount = 0;
   globalThis.fetch = async () => {
     fetchCount += 1;
@@ -267,10 +294,10 @@ test("developer attribution is returned directly without calling the model", asy
 test("model and API questions do not retrieve document excerpts", async () => {
   const originalFetch = globalThis.fetch;
   const originalEnvironment = saveProviderEnvironment();
-  useOpenAITestProvider();
+  useGeminiTestProvider();
   const requests = [];
-  globalThis.fetch = async (url, options) => {
-    requests.push({ url, body: JSON.parse(options.body) });
+  globalThis.fetch = async (input, options) => {
+    requests.push(await readRequest(input, options));
     return streamedAIResponse("I can’t provide private system or API information.");
   };
 
@@ -287,7 +314,7 @@ test("model and API questions do not retrieve document excerpts", async () => {
     await chatHandler(req, res);
 
     assert.equal(requests.length, 1);
-    const systemPrompt = requests[0].body.messages[0].content;
+    const systemPrompt = requests[0].body.system_instruction;
     assert.match(systemPrompt, /do not reveal the requested information/);
     assert.doesNotMatch(systemPrompt, /RELEVANT DOCUMENT EXCERPTS/);
     assert.match(res.chunks.join(""), /can’t provide private system or API information/);
@@ -297,20 +324,13 @@ test("model and API questions do not retrieve document excerpts", async () => {
   }
 });
 
-test("NVIDIA credentials select the NVIDIA endpoint and GLM streaming settings", async () => {
+test("a Gemini key selects the interactions endpoint and streaming settings", async () => {
   const originalFetch = globalThis.fetch;
   const originalEnvironment = saveProviderEnvironment();
-  delete process.env.OPENROUTER_API_KEY;
-  delete process.env.OPENROUTER_SITE_URL;
-  delete process.env.OPENROUTER_APP_NAME;
-  process.env.NVIDIA_API_KEY = "test-nvidia-key";
-  delete process.env.DEEPSEEK_API_KEY;
-  delete process.env.OPENAI_API_KEY;
-  delete process.env.API_BASE_URL;
-  delete process.env.AI_MODEL;
+  useGeminiTestProvider();
   const requests = [];
-  globalThis.fetch = async (url, options) => {
-    requests.push({ url, body: JSON.parse(options.body) });
+  globalThis.fetch = async (input, options) => {
+    requests.push(await readRequest(input, options));
     return streamedAIResponse();
   };
 
@@ -327,86 +347,67 @@ test("NVIDIA credentials select the NVIDIA endpoint and GLM streaming settings",
     await chatHandler(req, res);
 
     assert.equal(requests.length, 1);
-    assert.equal(requests[0].url, "https://integrate.api.nvidia.com/v1/chat/completions");
-    assert.equal(requests[0].body.model, "z-ai/glm-5.2");
-    assert.equal(requests[0].body.max_tokens, 16384);
-    assert.equal(requests[0].body.top_p, 1);
-    assert.equal(requests[0].body.seed, 42);
-  } finally {
-    globalThis.fetch = originalFetch;
-    restoreProviderEnvironment(originalEnvironment);
-  }
-});
-
-test("OpenRouter credentials select the Nemotron free model and attribution headers", async () => {
-  const originalFetch = globalThis.fetch;
-  const originalEnvironment = saveProviderEnvironment();
-  process.env.OPENROUTER_API_KEY = "test-openrouter-key";
-  process.env.OPENROUTER_SITE_URL = "https://example.vercel.app";
-  process.env.OPENROUTER_APP_NAME = "YPS AI";
-  delete process.env.NVIDIA_API_KEY;
-  delete process.env.DEEPSEEK_API_KEY;
-  delete process.env.OPENAI_API_KEY;
-  delete process.env.API_BASE_URL;
-  delete process.env.AI_MODEL;
-  const requests = [];
-  globalThis.fetch = async (url, options) => {
-    requests.push({ url, headers: options.headers, body: JSON.parse(options.body) });
-    return streamedAIResponse();
-  };
-
-  try {
-    const req = {
-      method: "POST",
-      body: {
-        language: "en",
-        source: "all",
-        messages: [{ role: "user", text: "Explain youth participation in peacebuilding." }],
-      },
-    };
-    const res = new StreamingResponse();
-    await chatHandler(req, res);
-
-    assert.equal(requests.length, 1);
-    assert.equal(requests[0].url, "https://openrouter.ai/api/v1/chat/completions");
-    assert.equal(requests[0].headers.Authorization, "Bearer test-openrouter-key");
-    assert.equal(requests[0].headers["HTTP-Referer"], "https://example.vercel.app");
-    assert.equal(requests[0].headers["X-OpenRouter-Title"], "YPS AI");
-    assert.equal(requests[0].body.model, "nvidia/nemotron-3-super-120b-a12b:free");
+    assert.equal(
+      requests[0].url,
+      "https://generativelanguage.googleapis.com/v1beta/interactions"
+    );
+    assert.equal(requests[0].headers["x-goog-api-key"], "test-gemini-key");
+    assert.equal(requests[0].body.model, "models/gemini-3.6-flash");
     assert.equal(requests[0].body.stream, true);
+    assert.equal(requests[0].body.generation_config.max_output_tokens, 65536);
+    assert.equal(requests[0].body.generation_config.thinking_level, "medium");
+    assert.match(res.chunks.join(""), /Test response/);
+    assert.doesNotMatch(res.chunks.join(""), /internal reasoning/);
   } finally {
     globalThis.fetch = originalFetch;
     restoreProviderEnvironment(originalEnvironment);
   }
 });
 
-test("GitHub GPT-5 omits unsupported sampling and legacy token parameters", async () => {
+test("AI_MODEL overrides the default model and accepts a bare model id", async () => {
   const originalFetch = globalThis.fetch;
   const originalEnvironment = saveProviderEnvironment();
-  delete process.env.OPENROUTER_API_KEY;
-  delete process.env.OPENROUTER_SITE_URL;
-  delete process.env.OPENROUTER_APP_NAME;
-  delete process.env.NVIDIA_API_KEY;
-  delete process.env.DEEPSEEK_API_KEY;
-  process.env.OPENAI_API_KEY = "test-github-token";
-  process.env.API_BASE_URL = '"https://models.github.ai/inference/chat/completions"';
-  process.env.AI_MODEL = '"https://github.com/marketplace/models/azure-openai/gpt-5"';
-
+  useGeminiTestProvider();
+  process.env.AI_MODEL = '"gemini-3.6-pro"';
   const requests = [];
-  globalThis.fetch = async (url, options) => {
-    const body = JSON.parse(options.body);
-    requests.push({ url, headers: options.headers, body });
+  globalThis.fetch = async (input, options) => {
+    requests.push(await readRequest(input, options));
+    return streamedAIResponse();
+  };
 
-    if (body.stream === false) {
-      return new Response(JSON.stringify({
-        choices: [{ message: { content: "Explain youth participation in peacebuilding." } }],
-      }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
+  try {
+    const req = {
+      method: "POST",
+      body: {
+        language: "en",
+        source: "all",
+        messages: [{ role: "user", text: "Explain youth participation in peacebuilding." }],
+      },
+    };
+    const res = new StreamingResponse();
+    await chatHandler(req, res);
+
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].body.model, "models/gemini-3.6-pro");
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreProviderEnvironment(originalEnvironment);
+  }
+});
+
+test("a non-English question is translated for retrieval before the answer is streamed", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalEnvironment = saveProviderEnvironment();
+  useGeminiTestProvider();
+  const requests = [];
+  globalThis.fetch = async (input, options) => {
+    const request = await readRequest(input, options);
+    requests.push(request);
+
+    if (request.body.stream !== true) {
+      return interactionResponse("Explain youth participation in peacebuilding.");
     }
-
-    return streamedAIResponse("Réponse GPT-5");
+    return streamedAIResponse("Réponse en français");
   };
 
   try {
@@ -425,49 +426,69 @@ test("GitHub GPT-5 omits unsupported sampling and legacy token parameters", asyn
     await chatHandler(req, res);
 
     assert.equal(requests.length, 2);
-    for (const request of requests) {
-      assert.equal(request.url, "https://models.github.ai/inference/chat/completions");
-      assert.equal(request.body.model, "openai/gpt-5");
-      assert.equal("temperature" in request.body, false);
-      assert.equal("max_tokens" in request.body, false);
-    }
-    assert.equal(requests[0].body.stream, false);
+    assert.equal(requests[0].body.stream, undefined);
+    assert.equal(requests[0].body.generation_config.thinking_level, "minimal");
+    assert.match(requests[0].body.system_instruction, /Translate the user's search query/);
     assert.equal(requests[1].body.stream, true);
-    const githubContextSources = [
-      ...requests[1].body.messages[0].content.matchAll(
-        /^\[\d+\] Publication title:/gm
-      ),
-    ];
-    assert.equal(githubContextSources.length, 5);
-    assert.ok(JSON.stringify(requests[1].body).length < 50000);
-    assert.match(res.chunks.join(""), /Réponse GPT-5/);
+    assert.match(requests[1].body.system_instruction, /Write the entire response in French/);
+    assert.deepEqual(
+      userInputTexts(requests[1].body.input),
+      ["Expliquez la participation des jeunes à la consolidation de la paix."]
+    );
+    assert.match(res.chunks.join(""), /Réponse en français/);
   } finally {
     globalThis.fetch = originalFetch;
     restoreProviderEnvironment(originalEnvironment);
   }
 });
 
-test("GitHub Models returns the provider's useful error detail", async () => {
+test("a missing Gemini key is reported without calling the model", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalEnvironment = saveProviderEnvironment();
+  delete process.env.GEMINI_API_KEY;
+  delete process.env.AI_MODEL;
+  let fetchCount = 0;
+  globalThis.fetch = async () => {
+    fetchCount += 1;
+    return streamedAIResponse();
+  };
+
+  try {
+    const req = {
+      method: "POST",
+      body: {
+        language: "en",
+        source: "all",
+        messages: [{ role: "user", text: "Explain youth participation." }],
+      },
+    };
+    const res = new StreamingResponse();
+    await chatHandler(req, res);
+
+    assert.equal(fetchCount, 0);
+    assert.equal(res.statusCode, 500);
+    assert.match(res.jsonBody.error, /Set GEMINI_API_KEY/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreProviderEnvironment(originalEnvironment);
+  }
+});
+
+test("Gemini returns the provider's useful error detail", async () => {
   const originalFetch = globalThis.fetch;
   const originalError = console.error;
   const originalEnvironment = saveProviderEnvironment();
-  delete process.env.OPENROUTER_API_KEY;
-  delete process.env.OPENROUTER_SITE_URL;
-  delete process.env.OPENROUTER_APP_NAME;
-  delete process.env.NVIDIA_API_KEY;
-  delete process.env.DEEPSEEK_API_KEY;
-  process.env.OPENAI_API_KEY = "test-github-token";
-  process.env.API_BASE_URL = "https://models.github.ai/inference";
-  process.env.AI_MODEL = "openai/gpt-5";
+  useGeminiTestProvider();
 
   console.error = () => {};
   globalThis.fetch = async () => new Response(JSON.stringify({
     error: {
-      message: "Unsupported request field for this model.",
-      code: "invalid_request_error",
+      code: 400,
+      message: "API key not valid. Please pass a valid API key.",
+      status: "INVALID_ARGUMENT",
     },
   }), {
-    status: 404,
+    status: 400,
     headers: { "Content-Type": "application/json" },
   });
 
@@ -483,90 +504,11 @@ test("GitHub Models returns the provider's useful error detail", async () => {
     const res = new StreamingResponse();
     await chatHandler(req, res);
 
-    assert.equal(res.statusCode, 404);
-    assert.match(res.jsonBody.error, /Unsupported request field for this model/);
+    assert.equal(res.statusCode, 400);
+    assert.match(res.jsonBody.error, /API key not valid/);
   } finally {
     globalThis.fetch = originalFetch;
     console.error = originalError;
-    restoreProviderEnvironment(originalEnvironment);
-  }
-});
-
-test("GitHub Models retries a rejected request with a compact payload", async () => {
-  const originalFetch = globalThis.fetch;
-  const originalWarn = console.warn;
-  const originalEnvironment = saveProviderEnvironment();
-  delete process.env.OPENROUTER_API_KEY;
-  delete process.env.OPENROUTER_SITE_URL;
-  delete process.env.OPENROUTER_APP_NAME;
-  delete process.env.NVIDIA_API_KEY;
-  delete process.env.DEEPSEEK_API_KEY;
-  process.env.OPENAI_API_KEY = "test-github-token";
-  process.env.API_BASE_URL = "https://models.github.ai/inference";
-  process.env.AI_MODEL = "openai/gpt-4o";
-
-  const requests = [];
-  console.warn = () => {};
-  globalThis.fetch = async (url, options) => {
-    requests.push({
-      url,
-      headers: options.headers,
-      body: JSON.parse(options.body),
-    });
-
-    if (requests.length === 1) {
-      return new Response(JSON.stringify({ message: "Payload is too large" }), {
-        status: 413,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-
-    return streamedAIResponse("Compact response");
-  };
-
-  try {
-    const messages = [];
-    for (let index = 1; index <= 12; index += 1) {
-      messages.push({
-        role: "user",
-        text: `Question ${index} about youth participation ${"x".repeat(500)}`,
-      });
-      messages.push({
-        role: "assistant",
-        text: `Answer ${index} ${"y".repeat(500)}`,
-      });
-    }
-    messages.push({
-      role: "user",
-      text: "Explain youth participation in peacebuilding.",
-    });
-
-    const req = {
-      method: "POST",
-      body: { language: "en", source: "all", messages },
-    };
-    const res = new StreamingResponse();
-    await chatHandler(req, res);
-
-    assert.equal(requests.length, 2);
-    assert.equal(requests[0].url, "https://models.github.ai/inference/chat/completions");
-    assert.equal(requests[0].headers.Authorization, "Bearer test-github-token");
-    assert.equal(requests[0].headers.Accept, "application/vnd.github+json");
-    assert.equal(requests[0].headers["X-GitHub-Api-Version"], "2026-03-10");
-    assert.equal(requests[0].body.model, "openai/gpt-4o");
-    assert.equal(requests[0].body.max_tokens, 1200);
-    assert.ok(requests[0].body.messages.length <= 10);
-
-    assert.equal(requests[1].body.max_tokens, 800);
-    assert.ok(requests[1].body.messages.length <= 4);
-    assert.doesNotMatch(
-      requests[1].body.messages[0].content,
-      /RELEVANT DOCUMENT EXCERPTS/
-    );
-    assert.match(res.chunks.join(""), /Compact response/);
-  } finally {
-    globalThis.fetch = originalFetch;
-    console.warn = originalWarn;
     restoreProviderEnvironment(originalEnvironment);
   }
 });

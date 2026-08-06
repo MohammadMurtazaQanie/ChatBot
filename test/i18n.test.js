@@ -180,30 +180,47 @@ test("website translation is static and completely separate from the chat API", 
   assert.match(frontend, /language:\s*languageCode/);
 });
 
+// The SDK calls fetch with a Request object rather than (url, options).
+async function readRequestBody(input, options = {}) {
+  const request = input instanceof Request ? input : new Request(String(input), options);
+  return request.clone().json();
+}
+
+function geminiStream(text) {
+  const stream = [
+    `data: ${JSON.stringify({
+      event_type: "step.delta",
+      index: 0,
+      delta: { type: "text", text },
+    })}`,
+    "",
+    "data: [DONE]",
+    "",
+  ].join("\n");
+  return new Response(stream, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+}
+
 test("chat endpoint translates a non-English retrieval query and enforces response language", async () => {
   const originalFetch = globalThis.fetch;
-  const originalKey = process.env.OPENAI_API_KEY;
-  const originalDeepSeekKey = process.env.DEEPSEEK_API_KEY;
-  process.env.OPENAI_API_KEY = "test-key";
-  delete process.env.DEEPSEEK_API_KEY;
+  const originalKey = process.env.GEMINI_API_KEY;
+  process.env.GEMINI_API_KEY = "test-gemini-key";
 
   const requests = [];
-  globalThis.fetch = async (url, options) => {
-    const body = JSON.parse(options.body);
+  globalThis.fetch = async (input, options) => {
+    const body = await readRequestBody(input, options);
     requests.push(body);
-    if (body.stream === false) {
+    if (body.stream !== true) {
       return new Response(JSON.stringify({
-        choices: [{ message: { content: "youth participation in decision making" } }],
+        id: "test-interaction",
+        status: "completed",
+        steps: [{
+          type: "model_output",
+          content: [{ type: "text", text: "youth participation in decision making" }],
+        }],
       }), { status: 200, headers: { "Content-Type": "application/json" } });
     }
 
-    const stream = [
-      'data: {"choices":[{"delta":{"content":"إجابة عربية"}}]}',
-      "",
-      "data: [DONE]",
-      "",
-    ].join("\n");
-    return new Response(stream, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+    return geminiStream("إجابة عربية");
   };
 
   try {
@@ -219,33 +236,26 @@ test("chat endpoint translates a non-English retrieval query and enforces respon
     await chatHandler(req, res);
 
     assert.equal(requests.length, 2);
-    assert.equal(requests[0].stream, false);
-    assert.match(requests[1].messages[0].content, /Write the entire response in Arabic/);
-    assert.match(requests[1].messages[0].content, /youth participation/i);
+    assert.equal(requests[0].stream, undefined);
+    assert.match(requests[1].system_instruction, /Write the entire response in Arabic/);
+    assert.match(requests[1].system_instruction, /youth participation/i);
     assert.match(res.chunks.join(""), /إجابة عربية/);
   } finally {
     globalThis.fetch = originalFetch;
-    if (originalKey === undefined) delete process.env.OPENAI_API_KEY;
-    else process.env.OPENAI_API_KEY = originalKey;
-    if (originalDeepSeekKey === undefined) delete process.env.DEEPSEEK_API_KEY;
-    else process.env.DEEPSEEK_API_KEY = originalDeepSeekKey;
+    if (originalKey === undefined) delete process.env.GEMINI_API_KEY;
+    else process.env.GEMINI_API_KEY = originalKey;
   }
 });
 
 test("security responses remain locked to the selected language", async () => {
   const originalFetch = globalThis.fetch;
-  const originalKey = process.env.OPENAI_API_KEY;
-  const originalDeepSeekKey = process.env.DEEPSEEK_API_KEY;
-  process.env.OPENAI_API_KEY = "test-key";
-  delete process.env.DEEPSEEK_API_KEY;
+  const originalKey = process.env.GEMINI_API_KEY;
+  process.env.GEMINI_API_KEY = "test-gemini-key";
 
   const requests = [];
-  globalThis.fetch = async (url, options) => {
-    requests.push(JSON.parse(options.body));
-    return new Response('data: {"choices":[{"delta":{"content":"Je peux uniquement aider…"}}]}\n\ndata: [DONE]\n\n', {
-      status: 200,
-      headers: { "Content-Type": "text/event-stream" },
-    });
+  globalThis.fetch = async (input, options) => {
+    requests.push(await readRequestBody(input, options));
+    return geminiStream("Je peux uniquement aider…");
   };
 
   try {
@@ -261,13 +271,11 @@ test("security responses remain locked to the selected language", async () => {
     await chatHandler(req, res);
 
     assert.equal(requests.length, 1);
-    assert.match(requests[0].messages[0].content, /natural French translation/);
-    assert.doesNotMatch(requests[0].messages[0].content, /RELEVANT DOCUMENT EXCERPTS/);
+    assert.match(requests[0].system_instruction, /natural French translation/);
+    assert.doesNotMatch(requests[0].system_instruction, /RELEVANT DOCUMENT EXCERPTS/);
   } finally {
     globalThis.fetch = originalFetch;
-    if (originalKey === undefined) delete process.env.OPENAI_API_KEY;
-    else process.env.OPENAI_API_KEY = originalKey;
-    if (originalDeepSeekKey === undefined) delete process.env.DEEPSEEK_API_KEY;
-    else process.env.DEEPSEEK_API_KEY = originalDeepSeekKey;
+    if (originalKey === undefined) delete process.env.GEMINI_API_KEY;
+    else process.env.GEMINI_API_KEY = originalKey;
   }
 });

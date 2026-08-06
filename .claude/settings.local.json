@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node -e \"console.log\\(require\\('./node_modules/@google/genai/package.json'\\).version\\)\")",
+      "Bash(grep -n \"^declare type Turn\\\\|^declare interface Turn\\\\|^declare type Content_2\\\\|^declare interface StepDelta\\\\b\\\\|^declare interface StepDelta \\\\|^declare type TextDelta\\\\|^declare interface StepStart\\\\|^declare interface StepStop\\\\|^declare type GenerationConfig_2\\\\|^declare interface ModelOutputStep\\\\|^declare type Step\\\\$\\\\|^declare type Step \" -A 40 genai.d.ts)",
+      "Bash(grep -n \"declare type Turn = \\\\|declare type Turn$\\\\|declare type UserInputStep\\\\|declare interface ModelOutputStep\\\\b\\\\|declare type ModelOutputStep\\\\|declare type TextContent\\\\b\\\\|declare type TextContent =\\\\|declare type ThinkingLevel_2\\\\|declare type GoogleSearch_2\" -A 30 genai.d.ts)",
+      "Bash(node -e \"const p=require\\('./node_modules/@google/genai/package.json'\\); console.log\\(JSON.stringify\\({main:p.main,module:p.module,exports:p.exports},null,2\\)\\)\")",
+      "Bash(sed -i.bak 's#from \"@google/genai\"#from \"/Users/murtaza/Desktop/ChatBot/node_modules/@google/genai/dist/node/index.mjs\"#' /private/tmp/claude-501/-Users-murtaza-Desktop-ChatBot/82359383-8b5a-4022-b911-e4503387e86d/scratchpad/probe.mjs)",
+      "Bash(node /private/tmp/claude-501/-Users-murtaza-Desktop-ChatBot/82359383-8b5a-4022-b911-e4503387e86d/scratchpad/probe.mjs)",
+      "Bash(node --check api/chat.js)",
+      "Bash(npm test *)",
+      "Bash(rm -f /private/tmp/claude-501/-Users-murtaza-Desktop-ChatBot/82359383-8b5a-4022-b911-e4503387e86d/scratchpad/probe*.mjs* && npm test 2>&1 | tail -10)"
+    ]
+  }
+}

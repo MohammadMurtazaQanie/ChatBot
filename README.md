@@ -14,30 +14,18 @@ npm test
 
 The browser loads the generated classic `app.js` bundle so all controls work in both traditional static hosting and module-aware hosting. After changing `script.js` or `i18n.js`, regenerate it with `npm run build`.
 
-## OpenRouter setup
+## Gemini setup
 
-The chat endpoint supports OpenRouter directly and defaults to `nvidia/nemotron-3-super-120b-a12b:free` whenever `OPENROUTER_API_KEY` is configured. OpenRouter takes priority when keys for more than one provider are present.
+The chat endpoint runs on the Gemini API through the `@google/genai` SDK and defaults to `models/gemini-3.6-flash`.
 
-Add these values in Vercel under **Project Settings → Environment Variables**:
-
-```text
-OPENROUTER_API_KEY=your-openrouter-key
-API_BASE_URL=https://openrouter.ai/api/v1
-AI_MODEL=nvidia/nemotron-3-super-120b-a12b:free
-OPENROUTER_SITE_URL=https://your-domain.example
-OPENROUTER_APP_NAME=YPS AI
-```
-
-`OPENROUTER_SITE_URL` and `OPENROUTER_APP_NAME` are optional attribution values. If `API_BASE_URL` or `AI_MODEL` still contains values from a previous NVIDIA or other-provider setup, replace them with the OpenRouter values above or delete them so the OpenRouter defaults are used. Keep the API key only in Vercel environment variables; never add it to the repository or browser code.
-
-## GitHub Models setup
-
-To use GitHub Models, add these values in Vercel and replace the model value with the exact publisher/model ID shown in the GitHub Models catalog:
+Create a key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey), then add it in Vercel under **Project Settings → Environment Variables** for Production, Preview, and Development:
 
 ```text
-OPENAI_API_KEY=your-github-token
-API_BASE_URL=https://models.github.ai/inference
-AI_MODEL=openai/gpt-5
+GEMINI_API_KEY=your-gemini-key
 ```
 
-Remove any `OPENROUTER_API_KEY`, `NVIDIA_API_KEY`, or `DEEPSEEK_API_KEY` value unless that provider should take priority. The endpoint automatically removes unsupported `temperature` and legacy `max_tokens` fields for GitHub reasoning models such as `openai/gpt-5`. It also applies a smaller conversation and document budget for GitHub Models; if GitHub returns HTTP 413, it retries once with a compact request. Keep the GitHub token only in Vercel environment variables.
+`AI_MODEL` is an optional override and accepts either a bare id (`gemini-3.6-pro`) or a full resource name (`models/gemini-3.6-pro`).
+
+Environment variables are applied at build time, so redeploy after adding or changing the key.
+
+For local development, copy `.env.example` to `.env` and run `vercel dev`. `.env` is gitignored — keep the key only in Vercel environment variables and your local `.env`, never in the repository or browser code.
