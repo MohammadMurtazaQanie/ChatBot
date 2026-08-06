@@ -7,8 +7,9 @@
  *   { messages: [{ role, text }], source: "all" | "Academic Research" | ..., language: "en" | "fr" | ... }
  *
  * Environment variables (Vercel dashboard → Settings → Environment Variables):
- *   GEMINI_API_KEY — required. Google AI Studio key: https://aistudio.google.com/apikey
- *   AI_MODEL       — optional Gemini model override (default: models/gemini-3.6-flash)
+ *   GEMINI_API_KEY         — required. Google AI Studio key: https://aistudio.google.com/apikey
+ *   AI_MODEL               — optional Gemini model override (default: models/gemini-3.6-flash)
+ *   GEMINI_THINKING_LEVEL  — optional minimal | low | medium | high (default: low)
  */
 
 import fs   from "fs";
@@ -29,7 +30,11 @@ const MAX_CONTEXT_CHARS = 2200;
 const MAX_RESPONSE_TOKENS = 65536;
 const TRANSLATION_RESPONSE_TOKENS = 2048;
 const DEFAULT_MODEL = "models/gemini-3.6-flash";
-const THINKING_LEVEL = "medium";
+
+// Thinking runs before the first token, so it is the main lever on the pause a
+// user sees before the answer starts streaming.
+const DEFAULT_THINKING_LEVEL = "low";
+const THINKING_LEVELS = new Set(["minimal", "low", "medium", "high"]);
 
 // ── Source → knowledge file mapping ──────────────────────────────────────────
 const SOURCE_TO_KEYS = {
@@ -170,6 +175,20 @@ function normalizeModelId(value) {
   const model = cleanEnvironmentValue(value);
   if (!model) return "";
   return model.startsWith("models/") ? model : `models/${model}`;
+}
+
+function normalizeThinkingLevel(value) {
+  const level = cleanEnvironmentValue(value).toLowerCase();
+  if (!level) return DEFAULT_THINKING_LEVEL;
+
+  if (!THINKING_LEVELS.has(level)) {
+    console.warn(
+      `[config] Unsupported GEMINI_THINKING_LEVEL "${level}"; using "${DEFAULT_THINKING_LEVEL}".`
+    );
+    return DEFAULT_THINKING_LEVEL;
+  }
+
+  return level;
 }
 
 function extractProviderError(error) {
@@ -479,6 +498,7 @@ export default async function handler(req, res) {
   }
 
   const model = normalizeModelId(process.env.AI_MODEL) || DEFAULT_MODEL;
+  const thinkingLevel = normalizeThinkingLevel(process.env.GEMINI_THINKING_LEVEL);
   const ai = new GoogleGenAI({ apiKey });
 
   // ── Parse body ────────────────────────────────────────────────────────────
@@ -726,7 +746,7 @@ FORMAT
       input: modelInput,
       generation_config: {
         max_output_tokens: MAX_RESPONSE_TOKENS,
-        thinking_level: THINKING_LEVEL,
+        thinking_level: thinkingLevel,
       },
       stream: true,
     }, {

@@ -24,8 +24,15 @@ Create a key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey)
 GEMINI_API_KEY=your-gemini-key
 ```
 
-`AI_MODEL` is an optional override and accepts either a bare id (`gemini-3.6-pro`) or a full resource name (`models/gemini-3.6-pro`).
+Two optional variables tune cost and speed without a code change:
 
-Environment variables are applied at build time, so redeploy after adding or changing the key.
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `AI_MODEL` | `models/gemini-3.6-flash` | Accepts a bare id (`gemini-3.5-flash`) or a full resource name (`models/gemini-3.5-flash`). |
+| `GEMINI_THINKING_LEVEL` | `low` | `minimal`, `low`, `medium`, or `high`. An unrecognized value logs a warning and falls back to `low`. |
+
+Thinking happens before the first token, so `GEMINI_THINKING_LEVEL` controls the pause a user sees before the answer starts streaming. Lower it first when the assistant feels slow; raise it if answers lose accuracy on complex questions.
+
+Environment variables are applied at build time, so redeploy after adding or changing any of them.
 
 For local development, copy `.env.example` to `.env` and run `vercel dev`. `.env` is gitignored — keep the key only in Vercel environment variables and your local `.env`, never in the repository or browser code.

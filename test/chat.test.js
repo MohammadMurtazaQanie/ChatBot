@@ -26,6 +26,7 @@ function saveProviderEnvironment() {
   return {
     GEMINI_API_KEY: process.env.GEMINI_API_KEY,
     AI_MODEL: process.env.AI_MODEL,
+    GEMINI_THINKING_LEVEL: process.env.GEMINI_THINKING_LEVEL,
   };
 }
 
@@ -38,6 +39,7 @@ function restoreProviderEnvironment(original) {
 
 function useGeminiTestProvider() {
   delete process.env.AI_MODEL;
+  delete process.env.GEMINI_THINKING_LEVEL;
   process.env.GEMINI_API_KEY = "test-gemini-key";
 }
 
@@ -355,7 +357,7 @@ test("a Gemini key selects the interactions endpoint and streaming settings", as
     assert.equal(requests[0].body.model, "models/gemini-3.6-flash");
     assert.equal(requests[0].body.stream, true);
     assert.equal(requests[0].body.generation_config.max_output_tokens, 65536);
-    assert.equal(requests[0].body.generation_config.thinking_level, "medium");
+    assert.equal(requests[0].body.generation_config.thinking_level, "low");
     assert.match(res.chunks.join(""), /Test response/);
     assert.doesNotMatch(res.chunks.join(""), /internal reasoning/);
   } finally {
@@ -391,6 +393,73 @@ test("AI_MODEL overrides the default model and accepts a bare model id", async (
     assert.equal(requests[0].body.model, "models/gemini-3.6-pro");
   } finally {
     globalThis.fetch = originalFetch;
+    restoreProviderEnvironment(originalEnvironment);
+  }
+});
+
+test("GEMINI_THINKING_LEVEL overrides the default thinking level", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalEnvironment = saveProviderEnvironment();
+  useGeminiTestProvider();
+  process.env.GEMINI_THINKING_LEVEL = " Medium ";
+  const requests = [];
+  globalThis.fetch = async (input, options) => {
+    requests.push(await readRequest(input, options));
+    return streamedAIResponse();
+  };
+
+  try {
+    const req = {
+      method: "POST",
+      body: {
+        language: "en",
+        source: "all",
+        messages: [{ role: "user", text: "Explain youth participation in peacebuilding." }],
+      },
+    };
+    const res = new StreamingResponse();
+    await chatHandler(req, res);
+
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].body.generation_config.thinking_level, "medium");
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreProviderEnvironment(originalEnvironment);
+  }
+});
+
+test("an unsupported thinking level falls back to the default", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWarn = console.warn;
+  const originalEnvironment = saveProviderEnvironment();
+  useGeminiTestProvider();
+  process.env.GEMINI_THINKING_LEVEL = "turbo";
+  const requests = [];
+  const warnings = [];
+  console.warn = (message) => warnings.push(String(message));
+  globalThis.fetch = async (input, options) => {
+    requests.push(await readRequest(input, options));
+    return streamedAIResponse();
+  };
+
+  try {
+    const req = {
+      method: "POST",
+      body: {
+        language: "en",
+        source: "all",
+        messages: [{ role: "user", text: "Explain youth participation in peacebuilding." }],
+      },
+    };
+    const res = new StreamingResponse();
+    await chatHandler(req, res);
+
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].body.generation_config.thinking_level, "low");
+    assert.ok(warnings.some((message) => /Unsupported GEMINI_THINKING_LEVEL "turbo"/.test(message)));
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
     restoreProviderEnvironment(originalEnvironment);
   }
 });
