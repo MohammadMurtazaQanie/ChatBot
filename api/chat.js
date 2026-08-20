@@ -35,6 +35,33 @@ const DEFAULT_MODEL = "models/gemini-3.6-flash";
 // user sees before the answer starts streaming.
 const DEFAULT_THINKING_LEVEL = "low";
 const THINKING_LEVELS = new Set(["minimal", "low", "medium", "high"]);
+const MAX_STREAM_ATTEMPTS = 3;
+const STREAM_RETRY_BASE_DELAY_MS = 500;
+
+const TRANSIENT_STREAM_ERROR_CODES = new Set([
+  "aborted",
+  "api_error",
+  "deadline_exceeded",
+  "gateway_timeout",
+  "internal",
+  "internal_error",
+  "rate_limit_exceeded",
+  "resource_exhausted",
+  "service_unavailable",
+  "stream_incomplete",
+  "timeout",
+  "unavailable",
+]);
+
+const CONTENT_BLOCK_ERROR_CODES = new Set([
+  "blocklist",
+  "content_blocked",
+  "language",
+  "prohibited_content",
+  "recitation",
+  "safety",
+  "spii",
+]);
 
 // ── Source → knowledge file mapping ──────────────────────────────────────────
 const SOURCE_TO_KEYS = {
@@ -199,6 +226,119 @@ function extractProviderError(error) {
     "";
 
   return detail.replace(/\s+/g, " ").trim().slice(0, 400);
+}
+
+function getProviderErrorCode(error) {
+  const code =
+    error?.providerCode ||
+    error?.error?.code ||
+    error?.error?.error?.code ||
+    error?.code ||
+    "";
+
+  return String(code).trim().toLowerCase();
+}
+
+function createInteractionStreamError(event) {
+  const error = new Error(
+    event?.error?.message || "The Gemini API interrupted the response stream."
+  );
+  error.name = "GeminiStreamError";
+  error.providerCode = String(event?.error?.code || "stream_error").toLowerCase();
+  return error;
+}
+
+function createIncompleteStreamError() {
+  const error = new Error(
+    "The Gemini response stream ended before interaction.completed."
+  );
+  error.name = "GeminiStreamError";
+  error.providerCode = "stream_incomplete";
+  return error;
+}
+
+function isTransientStreamError(error) {
+  const code = getProviderErrorCode(error);
+  const status = Number(error?.status || error?.error?.status);
+  const detail = extractProviderError(error);
+
+  if (code === "quota_exceeded") return false;
+  if (TRANSIENT_STREAM_ERROR_CODES.has(code)) return true;
+  if ([408, 429, 500, 502, 503, 504].includes(status)) return true;
+
+  return /deadline|fetch failed|network|socket|connection|terminated|timed? ?out|econnreset|eai_again/i.test(detail);
+}
+
+function describeStreamError(error) {
+  const code = getProviderErrorCode(error);
+
+  if (code === "quota_exceeded") {
+    return {
+      code,
+      message: "The Gemini API quota is exhausted. Check the project's Gemini quota or billing, then try again.",
+    };
+  }
+
+  if (["rate_limit_exceeded", "resource_exhausted"].includes(code)) {
+    return {
+      code,
+      message: "The Gemini API is temporarily rate-limited. Wait a moment and try again.",
+    };
+  }
+
+  if (["deadline_exceeded", "gateway_timeout", "stream_incomplete", "timeout"].includes(code)) {
+    return {
+      code,
+      message: "The Gemini API timed out before completing the response. Please try again.",
+    };
+  }
+
+  if (["api_error", "internal", "internal_error", "service_unavailable", "unavailable"].includes(code)) {
+    return {
+      code,
+      message: "The Gemini API is temporarily unavailable. Please try again shortly.",
+    };
+  }
+
+  if (CONTENT_BLOCK_ERROR_CODES.has(code)) {
+    return {
+      code,
+      message: "Gemini stopped this response because of its content policy. Try rephrasing the request.",
+    };
+  }
+
+  return {
+    code: code || "stream_error",
+    message: `The Gemini response stream was interrupted${code ? ` (${code})` : ""}. Please try again.`,
+  };
+}
+
+function waitForStreamRetry(attempt, signal) {
+  const exponentialDelay = STREAM_RETRY_BASE_DELAY_MS * (2 ** (attempt - 1));
+  const delay = exponentialDelay + Math.floor(Math.random() * 250);
+
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      const error = new Error("The request was aborted.");
+      error.name = "AbortError";
+      reject(error);
+      return;
+    }
+
+    const timeout = setTimeout(() => {
+      signal.removeEventListener("abort", handleAbort);
+      resolve();
+    }, delay);
+
+    function handleAbort() {
+      clearTimeout(timeout);
+      const error = new Error("The request was aborted.");
+      error.name = "AbortError";
+      reject(error);
+    }
+
+    signal.addEventListener("abort", handleAbort, { once: true });
+  });
 }
 
 // The interactions API takes a step list rather than role/content messages.
@@ -732,26 +872,29 @@ FORMAT
   const modelInput = buildModelInput(trimmedMessages, MAX_HISTORY_MESSAGES);
 
   // ── Call AI ───────────────────────────────────────────────────────────────
-  let aiStream;
   const upstreamController = new AbortController();
   const abortUpstream = () => {
     if (!res.writableEnded) upstreamController.abort();
   };
   res.once("close", abortUpstream);
 
+  const createAIStream = () => ai.interactions.create({
+    model,
+    system_instruction: systemPrompt,
+    input: modelInput,
+    generation_config: {
+      max_output_tokens: MAX_RESPONSE_TOKENS,
+      thinking_level: thinkingLevel,
+    },
+    stream: true,
+  }, {
+    fetchOptions: { signal: upstreamController.signal },
+    maxRetries: 2,
+  });
+
+  let aiStream;
   try {
-    aiStream = await ai.interactions.create({
-      model,
-      system_instruction: systemPrompt,
-      input: modelInput,
-      generation_config: {
-        max_output_tokens: MAX_RESPONSE_TOKENS,
-        thinking_level: thinkingLevel,
-      },
-      stream: true,
-    }, {
-      fetchOptions: { signal: upstreamController.signal },
-    });
+    aiStream = await createAIStream();
   } catch (err) {
     res.off("close", abortUpstream);
     if (err.name === "AbortError") return;
@@ -772,33 +915,81 @@ FORMAT
   startResponseStream(res);
 
   let receivedText = false;
+  let streamError = null;
 
   try {
-    for await (const event of aiStream) {
-      if (event.event_type === "error") {
-        throw new Error(event.error?.message || "The AI service interrupted the response.");
-      }
+    for (let attempt = 1; attempt <= MAX_STREAM_ATTEMPTS; attempt += 1) {
+      let interactionCompleted = false;
 
-      // Thought summaries arrive as their own delta type and are not shown.
-      if (event.event_type !== "step.delta" || event.delta?.type !== "text") continue;
+      try {
+        if (attempt > 1) aiStream = await createAIStream();
 
-      const delta = event.delta.text;
-      if (typeof delta === "string" && delta.length > 0) {
-        receivedText = true;
-        writeStreamEvent(res, { type: "delta", delta });
+        for await (const event of aiStream) {
+          if (event.event_type === "error") {
+            throw createInteractionStreamError(event);
+          }
+
+          if (event.event_type === "interaction.completed") {
+            interactionCompleted = true;
+            continue;
+          }
+
+          // Thought summaries arrive as their own delta type and are not shown.
+          if (event.event_type !== "step.delta" || event.delta?.type !== "text") continue;
+
+          const delta = event.delta.text;
+          if (typeof delta === "string" && delta.length > 0) {
+            receivedText = true;
+            writeStreamEvent(res, { type: "delta", delta });
+          }
+        }
+
+        if (!interactionCompleted) throw createIncompleteStreamError();
+
+        streamError = null;
+        break;
+      } catch (err) {
+        streamError = err;
+
+        const canRetry =
+          err.name !== "AbortError" &&
+          !receivedText &&
+          attempt < MAX_STREAM_ATTEMPTS &&
+          isTransientStreamError(err);
+
+        if (!canRetry) break;
+
+        console.warn(
+          `Gemini stream attempt ${attempt} failed (${getProviderErrorCode(err) || "network_error"}); retrying.`
+        );
+        await waitForStreamRetry(attempt, upstreamController.signal);
       }
     }
 
-    if (!receivedText) {
-      writeStreamEvent(res, { type: "delta", delta: "No response generated." });
-    }
-    writeStreamEvent(res, { type: "done" });
-  } catch (err) {
-    if (err.name !== "AbortError") {
-      console.error("Streaming error:", err);
+    if (streamError?.name === "AbortError") return;
+
+    if (streamError) {
+      console.error("Gemini streaming error:", streamError);
+      const diagnostic = describeStreamError(streamError);
       writeStreamEvent(res, {
         type: "error",
-        error: "The response stream was interrupted. Please try again.",
+        code: diagnostic.code,
+        error: diagnostic.message,
+      });
+    } else if (!receivedText) {
+      writeStreamEvent(res, { type: "delta", delta: "No response generated." });
+      writeStreamEvent(res, { type: "done" });
+    } else {
+      writeStreamEvent(res, { type: "done" });
+    }
+  } catch (err) {
+    if (err.name !== "AbortError") {
+      console.error("Gemini streaming retry error:", err);
+      const diagnostic = describeStreamError(err);
+      writeStreamEvent(res, {
+        type: "error",
+        code: diagnostic.code,
+        error: diagnostic.message,
       });
     }
   } finally {

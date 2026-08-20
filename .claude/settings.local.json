@@ -9,7 +9,17 @@
       "Bash(node /private/tmp/claude-501/-Users-murtaza-Desktop-ChatBot/82359383-8b5a-4022-b911-e4503387e86d/scratchpad/probe.mjs)",
       "Bash(node --check api/chat.js)",
       "Bash(npm test *)",
-      "Bash(rm -f /private/tmp/claude-501/-Users-murtaza-Desktop-ChatBot/82359383-8b5a-4022-b911-e4503387e86d/scratchpad/probe*.mjs* && npm test 2>&1 | tail -10)"
+      "Bash(rm -f /private/tmp/claude-501/-Users-murtaza-Desktop-ChatBot/82359383-8b5a-4022-b911-e4503387e86d/scratchpad/probe*.mjs* && npm test 2>&1 | tail -10)",
+      "Bash(gh api *)",
+      "Bash(curl -s -X POST https://chat-bot-bottt.vercel.app/api/chat -H \"Content-Type: application/json\" -d '{\"language\":\"en\",\"source\":\"all\",\"messages\":[{\"role\":\"user\",\"text\":\"Who developed YPS AI?\"}]}' --max-time 45)",
+      "Bash(curl -s -o /dev/null -w \"status=%{http_code} type=%{content_type}\\\\n\" -X POST https://mohammadmurtazaqanie.github.io/ChatBot/api/chat --max-time 20)",
+      "Bash(curl -s -D - -o /dev/null -X POST https://chat-bot-bottt.vercel.app/api/chat -H \"Content-Type: application/json\" -d '{\"language\":\"en\",\"source\":\"all\",\"messages\":[{\"role\":\"user\",\"text\":\"hi\"}]}' --max-time 30)",
+      "Bash(curl -s -o /tmp/dep.txt -w \"status=%{http_code}\\\\n\" -X POST https://chat-iu6zq731l-bottt.vercel.app/api/chat -H \"Content-Type: application/json\" -d '{\"language\":\"en\",\"source\":\"all\",\"messages\":[{\"role\":\"user\",\"text\":\"Who developed YPS AI?\"}]}' --max-time 45)",
+      "Read(//tmp/**)",
+      "Bash(curl -s -o /tmp/dep2.txt -w \"status=%{http_code}\\\\n\" -X POST https://chat-iu6zq731l-bottt.vercel.app/api/chat -H \"Content-Type: application/json\" -d '{\"language\":\"en\",\"source\":\"all\",\"messages\":[{\"role\":\"user\",\"text\":\"In one sentence, what is UNSCR 2250?\"}]}' --max-time 90)",
+      "Bash(git fetch *)",
+      "Bash(curl -s -o /tmp/prod.txt -w \"status=%{http_code} total=%{time_total}s ttfb=%{time_starttransfer}s\\\\n\" -X POST https://chat-bot-bottt.vercel.app/api/chat -H \"Content-Type: application/json\" -d '{\"language\":\"en\",\"source\":\"all\",\"messages\":[{\"role\":\"user\",\"text\":\"In one sentence, what is UNSCR 2250?\"}]}' --max-time 90)",
+      "Bash(git ls-remote *)"
     ]
   }
 }

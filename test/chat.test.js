@@ -67,9 +67,45 @@ function streamedAIResponse(text = "Test response") {
       delta: { type: "text", text },
     })}`,
     "",
+    `data: ${JSON.stringify({
+      event_type: "interaction.completed",
+      interaction: { id: "test-interaction", status: "completed" },
+    })}`,
+    "",
     "data: [DONE]",
     "",
   ].join("\n");
+  return new Response(stream, {
+    status: 200,
+    headers: { "Content-Type": "text/event-stream" },
+  });
+}
+
+function streamedAIError(code, message, text = "") {
+  const stream = [
+    `data: ${JSON.stringify({
+      event_type: "interaction.created",
+      interaction: { id: "test-interaction", status: "in_progress" },
+    })}`,
+    "",
+    ...(text
+      ? [
+          `data: ${JSON.stringify({
+            event_type: "step.delta",
+            index: 0,
+            delta: { type: "text", text },
+          })}`,
+          "",
+        ]
+      : []),
+    `data: ${JSON.stringify({
+      event_type: "error",
+      error: { code, message },
+    })}`,
+    "",
+    "",
+  ].join("\n");
+
   return new Response(stream, {
     status: 200,
     headers: { "Content-Type": "text/event-stream" },
@@ -575,6 +611,80 @@ test("Gemini returns the provider's useful error detail", async () => {
 
     assert.equal(res.statusCode, 400);
     assert.match(res.jsonBody.error, /API key not valid/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.error = originalError;
+    restoreProviderEnvironment(originalEnvironment);
+  }
+});
+
+test("a transient Gemini stream error is retried before text reaches the browser", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWarn = console.warn;
+  const originalEnvironment = saveProviderEnvironment();
+  useGeminiTestProvider();
+  let fetchCount = 0;
+  console.warn = () => {};
+
+  globalThis.fetch = async () => {
+    fetchCount += 1;
+    return fetchCount === 1
+      ? streamedAIError("service_unavailable", "The service is temporarily unavailable.")
+      : streamedAIResponse("Recovered response");
+  };
+
+  try {
+    const req = {
+      method: "POST",
+      body: {
+        language: "en",
+        source: "all",
+        messages: [{ role: "user", text: "Explain youth participation." }],
+      },
+    };
+    const res = new StreamingResponse();
+    await chatHandler(req, res);
+
+    const output = res.chunks.join("");
+    assert.equal(fetchCount, 2);
+    assert.match(output, /Recovered response/);
+    assert.doesNotMatch(output, /temporarily unavailable/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
+    restoreProviderEnvironment(originalEnvironment);
+  }
+});
+
+test("a Gemini quota error is not retried and returns a useful diagnostic", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalError = console.error;
+  const originalEnvironment = saveProviderEnvironment();
+  useGeminiTestProvider();
+  let fetchCount = 0;
+  console.error = () => {};
+
+  globalThis.fetch = async () => {
+    fetchCount += 1;
+    return streamedAIError("quota_exceeded", "Daily quota exhausted.");
+  };
+
+  try {
+    const req = {
+      method: "POST",
+      body: {
+        language: "en",
+        source: "all",
+        messages: [{ role: "user", text: "Explain youth participation." }],
+      },
+    };
+    const res = new StreamingResponse();
+    await chatHandler(req, res);
+
+    const output = res.chunks.join("");
+    assert.equal(fetchCount, 1);
+    assert.match(output, /"code":"quota_exceeded"/);
+    assert.match(output, /Gemini API quota is exhausted/);
   } finally {
     globalThis.fetch = originalFetch;
     console.error = originalError;

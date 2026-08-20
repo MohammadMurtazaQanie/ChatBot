@@ -194,6 +194,11 @@ function geminiStream(text) {
       delta: { type: "text", text },
     })}`,
     "",
+    `data: ${JSON.stringify({
+      event_type: "interaction.completed",
+      interaction: { id: "test-interaction", status: "completed" },
+    })}`,
+    "",
     "data: [DONE]",
     "",
   ].join("\n");
